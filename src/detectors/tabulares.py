@@ -114,7 +114,6 @@ def check_invoice_payment_mismatch(
             "currency": "MXN"
         }
 
-        # Construcción de provenance estricta con prefijos de entidad
         provenance = []
         if invoiced > 0.0:
             provenance.append(f"invoice:{inv_id}")
@@ -128,7 +127,7 @@ def check_invoice_payment_mismatch(
             if diff_lp < 0.0:
                 facts["mismatch_type"] = "LEDGER_UNDER_RECORDING"
                 facts["hidden_amount"] = abs(diff_lp)
-                anomaly_score = 0.90  # Alta criticidad forense
+                anomaly_score = 0.90
                 hypotheses = [
                     "Sub-registro intencional en libro mayor contable respecto al egreso bancario real (posible alteración contable / desvío de fondos).",
                     "Error material de captura u omisión de póliza contable complementaria en el ERP.",
@@ -284,9 +283,156 @@ def check_shannon_entropy_anomaly(
 
 
 # ==============================================================================
-# 4. Mocks de Datos
+# 4. Detector 3: Filtro de Anomalías Temporales (Fase 2)
 # ==============================================================================
-# --- Mock de Reconciliación Triple ---
+def check_temporal_anomalies(
+    df: pd.DataFrame,
+    timestamp_col: str,
+    vendor_col: str,
+    id_column: str = "transaction_id",
+    night_start_hour: int = 23,
+    night_end_hour: int = 5,
+    burst_window_minutes: float = 5.0,
+    burst_min_tx_count: int = 3
+) -> list[TabularObservation]:
+    """
+    Detecta anomalías temporales en transacciones:
+    1. Filtro de Horario (OFF_HOURS_EXECUTION): Horario nocturno (23:00 - 05:00) o fines de semana.
+    2. Filtro de Ráfagas / Velocity Checks (HIGH_VELOCITY_BURST): Más de 3 transacciones de un mismo
+       vendor en una ventana menor a 5 minutos.
+    """
+    observations: list[TabularObservation] = []
+
+    # Copia de trabajo y conversión explícita a datetime
+    df_temp = df.copy()
+    df_temp[timestamp_col] = pd.to_datetime(df_temp[timestamp_col])
+
+    # --------------------------------------------------------------------------
+    # 4.1. FILTRO DE HORARIO (OFF_HOURS_EXECUTION)
+    # --------------------------------------------------------------------------
+    for idx, row in df_temp.iterrows():
+        ts: pd.Timestamp = row[timestamp_col]
+        vendor_id = str(row[vendor_col])
+        tx_id = str(row[id_column]) if id_column in row else str(idx)
+        amount = float(row["amount"]) if "amount" in row else None
+
+        # Criterio nocturno: >= 23:00 o < 05:00 hrs
+        is_night = (ts.hour >= night_start_hour) or (ts.hour < night_end_hour)
+        # Criterio fin de semana: Sábado (5) o Domingo (6)
+        is_weekend = ts.dayofweek >= 5
+
+        if is_night or is_weekend:
+            reasons = []
+            if is_night:
+                reasons.append(f"Horario nocturno fuera de oficina ({ts.strftime('%H:%M:%S')} hrs)")
+            if is_weekend:
+                reasons.append(f"Fin de semana ({ts.day_name()})")
+
+            # Score graduado según severidad temporal
+            anomaly_score = 0.80 if (is_night and is_weekend) else (0.70 if is_night else 0.60)
+
+            facts = {
+                "transaction_id": tx_id,
+                "vendor_id": vendor_id,
+                "timestamp": ts.isoformat(),
+                "hour": int(ts.hour),
+                "day_name": ts.day_name(),
+                "is_night": bool(is_night),
+                "is_weekend": bool(is_weekend),
+                "amount": amount,
+                "reasons": reasons,
+                "currency": "MXN",
+                "mismatch_type": "OFF_HOURS_EXECUTION"
+            }
+
+            hypotheses = [
+                "Ejecución de dispersión no supervisada en horario inhábil para evadir controles operativos y monitoreo en tiempo real.",
+                "Proceso batch nocturno o tarea cron programada legítima de liquidación automática contable.",
+                "Adquisición de suministros o servicios de emergencia operativa autorizada fuera de horario habitual."
+            ]
+
+            obs = TabularObservation(
+                rule_or_model="check_temporal_anomalies_off_hours",
+                facts=facts,
+                anomaly_score_optional=anomaly_score,
+                hypotheses_optional=hypotheses,
+                provenance=[f"{id_column}:{tx_id}"]
+            )
+            observations.append(obs)
+
+    # --------------------------------------------------------------------------
+    # 4.2. FILTRO DE RÁFAGAS / VELOCITY CHECKS (HIGH_VELOCITY_BURST)
+    # --------------------------------------------------------------------------
+    df_sorted = df_temp.sort_values(by=[vendor_col, timestamp_col])
+
+    for vendor_id, group in df_sorted.groupby(vendor_col):
+        n = len(group)
+        if n <= burst_min_tx_count:
+            continue
+
+        timestamps = group[timestamp_col].tolist()
+        tx_ids = group[id_column].tolist() if id_column in group.columns else list(group.index)
+        amounts = group["amount"].tolist() if "amount" in group.columns else []
+
+        i = 0
+        while i < n:
+            j = i
+            # Expandir ventana mientras el tiempo delta <= burst_window_minutes
+            while j < n and (timestamps[j] - timestamps[i]) <= pd.Timedelta(minutes=burst_window_minutes):
+                j += 1
+
+            burst_len = j - i
+            # Detectar si registra más de 3 transacciones en la ventana (< 5 min)
+            if burst_len > burst_min_tx_count:
+                burst_txs = tx_ids[i:j]
+                burst_times = timestamps[i:j]
+                duration_sec = (burst_times[-1] - burst_times[0]).total_seconds()
+                burst_amounts = amounts[i:j] if amounts else []
+                total_burst_amt = round(sum(burst_amounts), 2) if burst_amounts else 0.0
+
+                facts = {
+                    "vendor_id": str(vendor_id),
+                    "transaction_count": burst_len,
+                    "burst_threshold_count": burst_min_tx_count,
+                    "window_start": burst_times[0].isoformat(),
+                    "window_end": burst_times[-1].isoformat(),
+                    "duration_seconds": round(duration_sec, 2),
+                    "window_limit_minutes": burst_window_minutes,
+                    "burst_amounts": [float(a) for a in burst_amounts] if burst_amounts else [],
+                    "total_burst_amount": total_burst_amt,
+                    "currency": "MXN",
+                    "mismatch_type": "HIGH_VELOCITY_BURST"
+                }
+
+                anomaly_score = 0.85
+
+                hypotheses = [
+                    f"Dispersión acelerada mediante scripts automatizados o bots ({burst_len} transacciones en {duration_sec:.1f} segundos) para extracción rápida de fondos (velocity abuse).",
+                    "Falla técnica o reintento concurrente descontrolado (retry storm / idempotency failure) en la pasarela bancaria.",
+                    "Procesamiento masivo simultáneo de facturación acumulada cargada por lote en tesorería."
+                ]
+
+                obs = TabularObservation(
+                    rule_or_model="check_temporal_anomalies_velocity_burst",
+                    facts=facts,
+                    anomaly_score_optional=anomaly_score,
+                    hypotheses_optional=hypotheses,
+                    provenance=[f"{id_column}:{tid}" for tid in burst_txs]
+                )
+                observations.append(obs)
+
+                # Avanzar puntero al final del burst para consolidar el evento sin duplicados
+                i = j
+            else:
+                i += 1
+
+    return observations
+
+
+# ==============================================================================
+# 5. Mocks de Datos
+# ==============================================================================
+# --- Mock 1: Reconciliación Triple (Invoices ↔ Payments ↔ Ledger) ---
 invoices_df = pd.DataFrame([
     {"invoice_id": "INV-001", "issuer_rfc": "PROV850101AAA", "total_amount": 10000.00, "issue_date": "2024-01-15"},
     {"invoice_id": "INV-002", "issuer_rfc": "SERV920312BBB", "total_amount": 25000.00, "issue_date": "2024-01-20"},
@@ -308,34 +454,40 @@ ledger_df = pd.DataFrame([
     {"transaction_id": "TX-004", "invoice_id": "INV-004", "recorded_amount": 25000.00}
 ])
 
-# --- Mock de Entropía: Transacciones por Proveedor ---
+# --- Mock 2: Transacciones con Marcas Temporales ---
 vendor_transactions_df = pd.DataFrame([
-    # Proveedor A: Montos variables normales (alta entropía de dispersión)
-    {"transaction_id": "TX-A01", "vendor_id": "PROV-A-LEGIT", "amount": 14250.00, "date": "2024-01-10"},
-    {"transaction_id": "TX-A02", "vendor_id": "PROV-A-LEGIT", "amount": 8300.00,  "date": "2024-01-17"},
-    {"transaction_id": "TX-A03", "vendor_id": "PROV-A-LEGIT", "amount": 21500.00, "date": "2024-01-24"},
-    {"transaction_id": "TX-A04", "vendor_id": "PROV-A-LEGIT", "amount": 4900.00,  "date": "2024-02-02"},
-    {"transaction_id": "TX-A05", "vendor_id": "PROV-A-LEGIT", "amount": 17800.00, "date": "2024-02-11"},
-    {"transaction_id": "TX-A06", "vendor_id": "PROV-A-LEGIT", "amount": 11650.00, "date": "2024-02-18"},
+    # Proveedor A: Montos variables normales en días y horarios laborales estándar (alta entropía, sin anomalías)
+    {"transaction_id": "TX-A01", "vendor_id": "PROV-A-LEGIT", "amount": 14250.00, "timestamp": "2024-01-10 10:15:00"},
+    {"transaction_id": "TX-A02", "vendor_id": "PROV-A-LEGIT", "amount": 8300.00,  "timestamp": "2024-01-17 11:30:00"},
+    {"transaction_id": "TX-A03", "vendor_id": "PROV-A-LEGIT", "amount": 21500.00, "timestamp": "2024-01-24 14:45:00"},
+    {"transaction_id": "TX-A04", "vendor_id": "PROV-A-LEGIT", "amount": 4900.00,  "timestamp": "2024-02-02 09:20:00"},
+    {"transaction_id": "TX-A05", "vendor_id": "PROV-A-LEGIT", "amount": 17800.00, "timestamp": "2024-02-12 16:10:00"},
+    {"transaction_id": "TX-A06", "vendor_id": "PROV-A-LEGIT", "amount": 11650.00, "timestamp": "2024-02-20 12:05:00"},
 
-    # Proveedor B: Montos idénticos coordinados de $9,999.00 (colapso de entropía / estructuración)
-    {"transaction_id": "TX-B01", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "date": "2024-01-12"},
-    {"transaction_id": "TX-B02", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "date": "2024-01-15"},
-    {"transaction_id": "TX-B03", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "date": "2024-01-19"},
-    {"transaction_id": "TX-B04", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "date": "2024-01-23"},
-    {"transaction_id": "TX-B05", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "date": "2024-01-28"},
-    {"transaction_id": "TX-B06", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "date": "2024-02-03"}
+    # Proveedor B: Montos idénticos coordinados de $9,999.00 en días hábiles (colapso de entropía / estructuración)
+    {"transaction_id": "TX-B01", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-12 10:00:00"},
+    {"transaction_id": "TX-B02", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-15 11:15:00"},
+    {"transaction_id": "TX-B03", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-19 14:30:00"},
+    {"transaction_id": "TX-B04", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-23 09:45:00"},
+    {"transaction_id": "TX-B05", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-29 15:20:00"},
+    {"transaction_id": "TX-B06", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-02-05 13:10:00"},
+
+    # Proveedor C: Ejecuciones nocturnas en fin de semana (Domingo de madrugada) + Ráfaga de 4 transacciones en < 5 min
+    {"transaction_id": "TX-C01", "vendor_id": "PROV-C-NIGHT", "amount": 8500.00,  "timestamp": "2024-02-18 02:00:15"},
+    {"transaction_id": "TX-C02", "vendor_id": "PROV-C-NIGHT", "amount": 14200.00, "timestamp": "2024-02-18 02:01:20"},
+    {"transaction_id": "TX-C03", "vendor_id": "PROV-C-NIGHT", "amount": 6800.00,  "timestamp": "2024-02-18 02:02:45"},
+    {"transaction_id": "TX-C04", "vendor_id": "PROV-C-NIGHT", "amount": 19300.00, "timestamp": "2024-02-18 02:03:50"}
 ])
 
 
 # ==============================================================================
-# 5. Ejecución de Ambos Detectores
+# 6. Ejecución de los Tres Detectores Tabulares
 # ==============================================================================
 if __name__ == "__main__":
-    # Ejecutar Detector 1: Reconciliación Determinista
+    # 1. Detector 1: Reconciliación Determinista
     recon_obs = check_invoice_payment_mismatch(invoices_df, payments_df, ledger_df)
 
-    # Ejecutar Detector 2: Filtro de Entropía de Shannon
+    # 2. Detector 2: Filtro de Entropía de Shannon
     entropy_obs = check_shannon_entropy_anomaly(
         df=vendor_transactions_df,
         column_name="amount",
@@ -343,8 +495,16 @@ if __name__ == "__main__":
         id_column="transaction_id"
     )
 
+    # 3. Detector 3: Filtro de Anomalías Temporales (Horario y Ráfagas)
+    temporal_obs = check_temporal_anomalies(
+        df=vendor_transactions_df,
+        timestamp_col="timestamp",
+        vendor_col="vendor_id",
+        id_column="transaction_id"
+    )
+
     # Consolidar todas las observaciones tabulares
-    all_observations = recon_obs + entropy_obs
+    all_observations = recon_obs + entropy_obs + temporal_obs
 
     # Imprimir en formato JSON estricto
     json_output = json.dumps([obs.model_dump() for obs in all_observations], indent=2, ensure_ascii=False)
