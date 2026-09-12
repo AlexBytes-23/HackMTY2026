@@ -4,11 +4,12 @@ Rama 3: Análisis Tabular / Probabilístico
 Ubicación: src/detectors/tabulares.py
 """
 
-from typing import Optional
+from typing import Optional, List
 import math
 import json
 import pandas as pd
 from pydantic import BaseModel
+from sklearn.ensemble import IsolationForest
 
 
 # ==============================================================================
@@ -38,7 +39,6 @@ def check_invoice_payment_mismatch(
     """
     observations: list[TabularObservation] = []
 
-    # 1. Agregación determinista de pagos por invoice_id
     payments_agg = (
         payments.groupby("invoice_id", as_index=False)
         .agg(
@@ -47,7 +47,6 @@ def check_invoice_payment_mismatch(
         )
     )
 
-    # 2. Cruce inicial: Invoices ↔ Payments
     merged = pd.merge(
         invoices,
         payments_agg,
@@ -55,7 +54,6 @@ def check_invoice_payment_mismatch(
         how="outer"
     )
 
-    # 3. Cruce con Ledger si se proporciona (Cruce Triple)
     if ledger is not None:
         ledger_agg = (
             ledger.groupby("invoice_id", as_index=False)
@@ -75,11 +73,9 @@ def check_invoice_payment_mismatch(
         merged["total_ledger"] = 0.0
         merged["ledger_tx_ids"] = [[] for _ in range(len(merged))]
 
-    # Relleno de nulos para aritmética exacta
     merged["total_amount"] = merged["total_amount"].fillna(0.0)
     merged["total_paid"] = merged["total_paid"].fillna(0.0)
 
-    # 4. Cálculo de diferencias deterministas
     merged["diff_payment_invoice"] = (merged["total_paid"] - merged["total_amount"]).round(2)
     merged["diff_ledger_payment"] = (merged["total_ledger"] - merged["total_paid"]).round(2)
     merged["diff_ledger_invoice"] = (merged["total_ledger"] - merged["total_amount"]).round(2)
@@ -99,7 +95,6 @@ def check_invoice_payment_mismatch(
         has_pi_mismatch = abs(diff_pi) > tolerance
         has_ledger_mismatch = (ledger is not None) and (abs(diff_lp) > tolerance or abs(diff_li) > tolerance)
 
-        # Si no hay ninguna discrepancia matemática, ignorar (cuadre perfecto)
         if not has_pi_mismatch and not has_ledger_mismatch:
             continue
 
@@ -122,7 +117,6 @@ def check_invoice_payment_mismatch(
         for txid in tx_ids:
             provenance.append(f"ledger:{txid}")
 
-        # CASO 1: ESCENARIO MALICIOSO / DISCREPANCIA CONTABLE
         if not has_pi_mismatch and has_ledger_mismatch:
             if diff_lp < 0.0:
                 facts["mismatch_type"] = "LEDGER_UNDER_RECORDING"
@@ -143,8 +137,6 @@ def check_invoice_payment_mismatch(
                     "Duplicidad de asiento contable en el libro mayor para una misma póliza de egreso.",
                     "Registro de pasivo contable pendiente de pago no conciliado con el banco."
                 ]
-
-        # CASO 2: DISCREPANCIA ENTRE FACTURA Y PAGO
         elif invoiced == 0.0 and paid > 0.0:
             facts["mismatch_type"] = "ORPHAN_PAYMENT"
             anomaly_score = 0.85
@@ -207,8 +199,7 @@ def check_shannon_entropy_anomaly(
     """
     Calcula la Entropía de Shannon H(X) sobre una columna cuantitativa agrupada por un identificador.
     Normaliza la entropía H_norm = H(X) / log2(N).
-    Detecta colapsos anormales de entropía (H_norm < entropy_threshold), característicos de
-    patrones estructurados / fraccionados (smurfing, montos fijos idénticos repetitivos).
+    Detecta colapsos anormales de entropía (H_norm < entropy_threshold).
     """
     observations: list[TabularObservation] = []
 
@@ -217,28 +208,20 @@ def check_shannon_entropy_anomaly(
         if n_samples < min_samples:
             continue
 
-        # Distribución de frecuencias empíricas P(x)
         counts = group_df[column_name].value_counts()
         probabilities = counts / n_samples
 
-        # Cálculo de Entropía de Shannon: H(X) = -sum(P(x) * log2(P(x)))
         raw_h = -sum(p * math.log2(p) for p in probabilities if p > 0.0)
         shannon_h = abs(raw_h) if abs(raw_h) > 1e-12 else 0.0
-
-        # Máxima entropía teórica para N observaciones: H_max = log2(N)
         max_h = math.log2(n_samples) if n_samples > 1 else 1.0
-
-        # Entropía normalizada entre 0.0 (colapso total) y 1.0 (máxima variabilidad)
         norm_h = (shannon_h / max_h) if max_h > 0 else 1.0
         norm_h = round(max(0.0, min(1.0, norm_h)), 4)
 
-        # Detección: Colapso de variabilidad por debajo del umbral
         if norm_h < entropy_threshold:
             dominant_val = counts.index[0]
             dominant_count = int(counts.iloc[0])
             dominant_ratio = round(dominant_count / n_samples, 4)
 
-            # Extraer identificadores exactos para trazabilidad forense
             if id_column in group_df.columns:
                 provenance = [f"{id_column}:{tid}" for tid in group_df[id_column]]
             else:
@@ -260,9 +243,7 @@ def check_shannon_entropy_anomaly(
                 "mismatch_type": "ENTROPY_COLLAPSE_STRUCTURED_PATTERN"
             }
 
-            # Score de anomalía inversamente proporcional a la entropía normalizada
             anomaly_score = round(1.0 - norm_h, 2)
-
             hypotheses = [
                 f"Posible estructuración o fraccionamiento deliberado (smurfing) mediante {dominant_count} transacciones idénticas de ${dominant_val:,.2f} para evadir umbrales regulatorios de control o comités de aprobación.",
                 "Dispersión recurrente automatizada mediante scripts programados con parámetros fijos en tesorería.",
@@ -303,22 +284,17 @@ def check_temporal_anomalies(
     """
     observations: list[TabularObservation] = []
 
-    # Copia de trabajo y conversión explícita a datetime
     df_temp = df.copy()
     df_temp[timestamp_col] = pd.to_datetime(df_temp[timestamp_col])
 
-    # --------------------------------------------------------------------------
-    # 4.1. FILTRO DE HORARIO (OFF_HOURS_EXECUTION)
-    # --------------------------------------------------------------------------
+    # 4.1. Filtro de Horario (OFF_HOURS_EXECUTION)
     for idx, row in df_temp.iterrows():
         ts: pd.Timestamp = row[timestamp_col]
         vendor_id = str(row[vendor_col])
         tx_id = str(row[id_column]) if id_column in row else str(idx)
         amount = float(row["amount"]) if "amount" in row else None
 
-        # Criterio nocturno: >= 23:00 o < 05:00 hrs
         is_night = (ts.hour >= night_start_hour) or (ts.hour < night_end_hour)
-        # Criterio fin de semana: Sábado (5) o Domingo (6)
         is_weekend = ts.dayofweek >= 5
 
         if is_night or is_weekend:
@@ -328,7 +304,6 @@ def check_temporal_anomalies(
             if is_weekend:
                 reasons.append(f"Fin de semana ({ts.day_name()})")
 
-            # Score graduado según severidad temporal
             anomaly_score = 0.80 if (is_night and is_weekend) else (0.70 if is_night else 0.60)
 
             facts = {
@@ -360,9 +335,7 @@ def check_temporal_anomalies(
             )
             observations.append(obs)
 
-    # --------------------------------------------------------------------------
-    # 4.2. FILTRO DE RÁFAGAS / VELOCITY CHECKS (HIGH_VELOCITY_BURST)
-    # --------------------------------------------------------------------------
+    # 4.2. Filtro de Ráfagas / Velocity Checks (HIGH_VELOCITY_BURST)
     df_sorted = df_temp.sort_values(by=[vendor_col, timestamp_col])
 
     for vendor_id, group in df_sorted.groupby(vendor_col):
@@ -377,12 +350,10 @@ def check_temporal_anomalies(
         i = 0
         while i < n:
             j = i
-            # Expandir ventana mientras el tiempo delta <= burst_window_minutes
             while j < n and (timestamps[j] - timestamps[i]) <= pd.Timedelta(minutes=burst_window_minutes):
                 j += 1
 
             burst_len = j - i
-            # Detectar si registra más de 3 transacciones en la ventana (< 5 min)
             if burst_len > burst_min_tx_count:
                 burst_txs = tx_ids[i:j]
                 burst_times = timestamps[i:j]
@@ -405,7 +376,6 @@ def check_temporal_anomalies(
                 }
 
                 anomaly_score = 0.85
-
                 hypotheses = [
                     f"Dispersión acelerada mediante scripts automatizados o bots ({burst_len} transacciones en {duration_sec:.1f} segundos) para extracción rápida de fondos (velocity abuse).",
                     "Falla técnica o reintento concurrente descontrolado (retry storm / idempotency failure) en la pasarela bancaria.",
@@ -420,8 +390,6 @@ def check_temporal_anomalies(
                     provenance=[f"{id_column}:{tid}" for tid in burst_txs]
                 )
                 observations.append(obs)
-
-                # Avanzar puntero al final del burst para consolidar el evento sin duplicados
                 i = j
             else:
                 i += 1
@@ -430,7 +398,149 @@ def check_temporal_anomalies(
 
 
 # ==============================================================================
-# 5. Mocks de Datos
+# 5. Detector 4: Isolation Forest Multidimensional (Fase 3)
+# ==============================================================================
+def check_isolation_forest_anomalies(
+    df: pd.DataFrame,
+    feature_cols: Optional[List[str]] = None,
+    id_column: str = "transaction_id",
+    contamination: float = 0.1,
+    random_state: int = 42
+) -> List[TabularObservation]:
+    """
+    Fase 3: Detector Multidimensional no lineal basado en Isolation Forest.
+    Aprende la frontera sobre combinaciones numéricas (ej. amount, hour).
+    Identifica registros anómalos multivariados (predicción == -1) y deriva un anomaly score
+    normalizado a partir de decision_function.
+    """
+    observations: List[TabularObservation] = []
+
+    if len(df) == 0:
+        return observations
+
+    df_features = df.copy()
+
+    # Si timestamp está presente y se requiere 'hour', derivarla
+    if "timestamp" in df_features.columns:
+        df_features["hour"] = pd.to_datetime(df_features["timestamp"]).dt.hour
+
+    # Seleccionar características numéricas a evaluar
+    if feature_cols is None:
+        feature_cols = [c for c in ["amount", "hour"] if c in df_features.columns]
+        if not feature_cols:
+            feature_cols = df_features.select_dtypes(include=["number"]).columns.tolist()
+
+    if not feature_cols:
+        return observations
+
+    X = df_features[feature_cols].fillna(0.0)
+
+    # Entrenar IsolationForest determinísticamente con semilla fija
+    iso_forest = IsolationForest(
+        contamination=contamination,
+        random_state=random_state
+    )
+    predictions = iso_forest.fit_predict(X)
+    raw_scores = iso_forest.decision_function(X)  # En scikit-learn, más negativo = más anómalo
+
+    # Normalización del score de anomalía a rango [0.0, 1.0]
+    min_s, max_s = float(raw_scores.min()), float(raw_scores.max())
+    score_range = (max_s - min_s) if max_s > min_s else 1.0
+    normalized_scores = 1.0 - ((raw_scores - min_s) / score_range)
+
+    for idx, (pred, raw_s, norm_s) in enumerate(zip(predictions, raw_scores, normalized_scores)):
+        if pred == -1:
+            row = df_features.iloc[idx]
+            tx_id = str(row[id_column]) if id_column in row else str(idx)
+
+            facts = {
+                "transaction_id": tx_id,
+                "vendor_id": str(row["vendor_id"]) if "vendor_id" in row else None,
+                "features_evaluated": feature_cols,
+                "feature_values": {col: float(row[col]) for col in feature_cols},
+                "decision_function_score": round(float(raw_s), 4),
+                "contamination": contamination,
+                "currency": "MXN",
+                "mismatch_type": "MULTIDIMENSIONAL_ISOLATION_ANOMALY"
+            }
+            if "timestamp" in row:
+                facts["timestamp"] = str(row["timestamp"])
+
+            hypotheses = [
+                "Transacción atípica multivariada en el espacio de características (combinación inusual de importe y horario respecto a la población de datos).",
+                "Operación extraordinaria o fuera de catálogo que no se ajusta a los patrones de dispersión habituales.",
+                "Posible error humano de captura o prueba de límites en el sistema bancario/ERP."
+            ]
+
+            obs = TabularObservation(
+                rule_or_model="check_isolation_forest_anomalies",
+                facts=facts,
+                anomaly_score_optional=round(float(norm_s), 2),
+                hypotheses_optional=hypotheses,
+                provenance=[f"{id_column}:{tx_id}"]
+            )
+            observations.append(obs)
+
+    return observations
+
+
+# ==============================================================================
+# 6. Punto de Entrada Unificado (Pipeline Tabular Completo)
+# ==============================================================================
+def run_all_tabular_detectors(
+    invoices_df: pd.DataFrame,
+    payments_df: pd.DataFrame,
+    ledger_df: pd.DataFrame,
+    transactions_df: pd.DataFrame
+) -> List[TabularObservation]:
+    """
+    Punto de entrada unificado para la Rama 3: Análisis Tabular y Probabilístico.
+    Ejecuta secuencialmente los 4 detectores de auditoría forense:
+      1. Reconciliación Determinista Triple (Invoices ↔ Payments ↔ Ledger)
+      2. Filtro de Entropía de Shannon (Colapso de variabilidad / Smurfing)
+      3. Filtro de Anomalías Temporales (Horarios nocturnos, fin de semana y ráfagas)
+      4. Isolation Forest (Anomalías multidimensionales no lineales)
+    Retorna la lista consolidada de todas las observaciones bajo el contrato TabularObservation.
+    """
+    all_observations: List[TabularObservation] = []
+
+    # 1. Reconciliación Determinista Triple
+    recon_obs = check_invoice_payment_mismatch(invoices_df, payments_df, ledger_df)
+    all_observations.extend(recon_obs)
+
+    # 2. Filtro de Entropía de Shannon
+    entropy_obs = check_shannon_entropy_anomaly(
+        df=transactions_df,
+        column_name="amount",
+        group_by_column="vendor_id",
+        id_column="transaction_id"
+    )
+    all_observations.extend(entropy_obs)
+
+    # 3. Filtro de Anomalías Temporales (Horarios y Ráfagas)
+    temporal_obs = check_temporal_anomalies(
+        df=transactions_df,
+        timestamp_col="timestamp",
+        vendor_col="vendor_id",
+        id_column="transaction_id"
+    )
+    all_observations.extend(temporal_obs)
+
+    # 4. Isolation Forest Multidimensional
+    iso_obs = check_isolation_forest_anomalies(
+        df=transactions_df,
+        feature_cols=["amount", "hour"],
+        id_column="transaction_id",
+        contamination=0.1,
+        random_state=42
+    )
+    all_observations.extend(iso_obs)
+
+    return all_observations
+
+
+# ==============================================================================
+# 7. Mocks de Datos
 # ==============================================================================
 # --- Mock 1: Reconciliación Triple (Invoices ↔ Payments ↔ Ledger) ---
 invoices_df = pd.DataFrame([
@@ -456,7 +566,7 @@ ledger_df = pd.DataFrame([
 
 # --- Mock 2: Transacciones con Marcas Temporales ---
 vendor_transactions_df = pd.DataFrame([
-    # Proveedor A: Montos variables normales en días y horarios laborales estándar (alta entropía, sin anomalías)
+    # Proveedor A: Montos variables en días y horarios laborales normales (control negativo)
     {"transaction_id": "TX-A01", "vendor_id": "PROV-A-LEGIT", "amount": 14250.00, "timestamp": "2024-01-10 10:15:00"},
     {"transaction_id": "TX-A02", "vendor_id": "PROV-A-LEGIT", "amount": 8300.00,  "timestamp": "2024-01-17 11:30:00"},
     {"transaction_id": "TX-A03", "vendor_id": "PROV-A-LEGIT", "amount": 21500.00, "timestamp": "2024-01-24 14:45:00"},
@@ -464,7 +574,7 @@ vendor_transactions_df = pd.DataFrame([
     {"transaction_id": "TX-A05", "vendor_id": "PROV-A-LEGIT", "amount": 17800.00, "timestamp": "2024-02-12 16:10:00"},
     {"transaction_id": "TX-A06", "vendor_id": "PROV-A-LEGIT", "amount": 11650.00, "timestamp": "2024-02-20 12:05:00"},
 
-    # Proveedor B: Montos idénticos coordinados de $9,999.00 en días hábiles (colapso de entropía / estructuración)
+    # Proveedor B: Montos idénticos coordinados de $9,999.00 en días hábiles (colapso de entropía)
     {"transaction_id": "TX-B01", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-12 10:00:00"},
     {"transaction_id": "TX-B02", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-15 11:15:00"},
     {"transaction_id": "TX-B03", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-19 14:30:00"},
@@ -472,7 +582,7 @@ vendor_transactions_df = pd.DataFrame([
     {"transaction_id": "TX-B05", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-01-29 15:20:00"},
     {"transaction_id": "TX-B06", "vendor_id": "PROV-B-STRUCT", "amount": 9999.00, "timestamp": "2024-02-05 13:10:00"},
 
-    # Proveedor C: Ejecuciones nocturnas en fin de semana (Domingo de madrugada) + Ráfaga de 4 transacciones en < 5 min
+    # Proveedor C: Ejecuciones nocturnas en fin de semana (Domingo 02:00 AM) + Ráfaga de 4 transacciones en < 5 min
     {"transaction_id": "TX-C01", "vendor_id": "PROV-C-NIGHT", "amount": 8500.00,  "timestamp": "2024-02-18 02:00:15"},
     {"transaction_id": "TX-C02", "vendor_id": "PROV-C-NIGHT", "amount": 14200.00, "timestamp": "2024-02-18 02:01:20"},
     {"transaction_id": "TX-C03", "vendor_id": "PROV-C-NIGHT", "amount": 6800.00,  "timestamp": "2024-02-18 02:02:45"},
@@ -481,31 +591,15 @@ vendor_transactions_df = pd.DataFrame([
 
 
 # ==============================================================================
-# 6. Ejecución de los Tres Detectores Tabulares
+# 8. Ejecución Principal Unificada
 # ==============================================================================
 if __name__ == "__main__":
-    # 1. Detector 1: Reconciliación Determinista
-    recon_obs = check_invoice_payment_mismatch(invoices_df, payments_df, ledger_df)
-
-    # 2. Detector 2: Filtro de Entropía de Shannon
-    entropy_obs = check_shannon_entropy_anomaly(
-        df=vendor_transactions_df,
-        column_name="amount",
-        group_by_column="vendor_id",
-        id_column="transaction_id"
+    results = run_all_tabular_detectors(
+        invoices_df=invoices_df,
+        payments_df=payments_df,
+        ledger_df=ledger_df,
+        transactions_df=vendor_transactions_df
     )
 
-    # 3. Detector 3: Filtro de Anomalías Temporales (Horario y Ráfagas)
-    temporal_obs = check_temporal_anomalies(
-        df=vendor_transactions_df,
-        timestamp_col="timestamp",
-        vendor_col="vendor_id",
-        id_column="transaction_id"
-    )
-
-    # Consolidar todas las observaciones tabulares
-    all_observations = recon_obs + entropy_obs + temporal_obs
-
-    # Imprimir en formato JSON estricto
-    json_output = json.dumps([obs.model_dump() for obs in all_observations], indent=2, ensure_ascii=False)
+    json_output = json.dumps([obs.model_dump() for obs in results], indent=2, ensure_ascii=False)
     print(json_output)
