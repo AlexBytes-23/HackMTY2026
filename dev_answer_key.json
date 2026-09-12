@@ -1,0 +1,109 @@
+{
+  "metadata": {
+    "title": "Ground Truth Answer Key - Forensic Auditor",
+    "generated_at": "2026-09-12",
+    "note": "Documento forense secreto. No debe incluirse dentro de la base de datos estate.db"
+  },
+  "schemes": [
+    {
+      "scheme_type": "PHANTOM_VENDOR_EFOS",
+      "is_fraud": true,
+      "description": "Proveedor listado en Art. 69-B del SAT cobró 3 facturas sin orden de compra ni contrato.",
+      "vendor_id": "VEND-0001",
+      "vendor_rfc": "AHF211218DPB",
+      "vendor_name": "Alvarado-Laureano",
+      "invoice_ids": [
+        "INV-00351",
+        "INV-00352",
+        "INV-00353"
+      ],
+      "invoice_uuids": [
+        "07fc584e-a1b2-4627-81d6-7019d97e8d3c",
+        "8d3543be-0962-4ec9-a803-82eb36777be4",
+        "392a9fc4-647a-4591-9da6-4a3a260ccfb4"
+      ],
+      "bank_txn_ids": [
+        "TXN-00351",
+        "TXN-00352",
+        "TXN-00353"
+      ],
+      "total_exposure": 1463868.43
+    },
+    {
+      "scheme_type": "THRESHOLD_SPLITTING",
+      "is_fraud": true,
+      "description": "6 facturas emitidas en la misma semana por subtotal idéntico de $89,500 para evadir controles.",
+      "vendor_id": "VEND-0002",
+      "vendor_rfc": "QOF000323PKH",
+      "vendor_name": "Molina, Ledesma y Cortés",
+      "subtotal_per_invoice": 89500.0,
+      "total_per_invoice": 103820.0,
+      "invoice_ids": [
+        "INV-00354",
+        "INV-00355",
+        "INV-00356",
+        "INV-00357",
+        "INV-00358",
+        "INV-00359"
+      ],
+      "invoice_uuids": [
+        "172e8c68-82aa-4c46-8049-9bbf76f6a778",
+        "a9a54c24-02b6-42e9-808e-08d25d264b1b",
+        "fb5abb36-ce79-48b7-b6c8-b8b9d9155664",
+        "839e7623-c1d8-41d3-aa74-b90caf2537f5",
+        "90fcc9f1-2ddc-456b-a8c2-cce9723b80d4",
+        "256d4d11-f7bd-4499-9f48-2e7ca8cf4f62"
+      ],
+      "bank_txn_ids": [
+        "TXN-00354",
+        "TXN-00355",
+        "TXN-00356",
+        "TXN-00357",
+        "TXN-00358",
+        "TXN-00359"
+      ],
+      "total_exposure": 622920.0
+    },
+    {
+      "scheme_type": "KICKBACK",
+      "is_fraud": true,
+      "description": "Retorno de fondos del 10% desde la cuenta del proveedor hacia la cuenta bancaria de un empleado.",
+      "vendor_id": "VEND-0012",
+      "vendor_name": "Barrientos-Guevara S.A. de C.V.",
+      "vendor_clabe": "062600420948776897",
+      "employee_id": "EMP-001",
+      "employee_name": "Ing. Eugenia Apodaca",
+      "employee_clabe": "044039328707617027",
+      "original_txn_id": "TXN-00001",
+      "original_payment_amount": 94191.68,
+      "kickback_txn_id": "TXN-00360",
+      "kickback_amount": 9419.17
+    },
+    {
+      "scheme_type": "DECOY_LEGITIMATE_RETAINER",
+      "is_fraud": false,
+      "description": "Señuelo legítimo: 12 facturas mensuales idénticas de $38,000 justificadas plenamente por contrato CTR marco.",
+      "vendor_id": "VEND-0003",
+      "vendor_rfc": "PUSN120218KW5",
+      "vendor_name": "Eugenia María Nava",
+      "contract_id": "CTR-0021",
+      "monthly_subtotal": 38000.0,
+      "monthly_total": 44080.0,
+      "invoice_ids": [
+        "INV-00360",
+        "INV-00361",
+        "INV-00362",
+        "INV-00363",
+        "INV-00364",
+        "INV-00365",
+        "INV-00366",
+        "INV-00367",
+        "INV-00368",
+        "INV-00369",
+        "INV-00370",
+        "INV-00371"
+      ],
+      "total_amount_year": 528960.0
+    }
+  ]
+}
