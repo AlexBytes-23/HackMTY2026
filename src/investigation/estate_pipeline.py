@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from src.core.estate import EstateRepository
 from src.core.models import Lead, Observation
 from src.detectors.deterministic_tabular import run_deterministic_tabular_detectors
+from src.detectors.deterministic_relational import run_deterministic_relational_detectors
 from src.investigation.case_builder import build_case_state
 from src.investigation.investigator import LLMClient
 from src.investigation.lead_builder import build_leads
@@ -98,6 +99,7 @@ def run_estate_preverification(
     # Discovery failures are systemic and should fail loudly rather than silently
     # returning an apparently clean audit.
     observations = run_deterministic_tabular_detectors(estate)
+    observations.extend(run_deterministic_relational_detectors(estate))
     leads = build_leads(observations)
 
     selected_leads = leads if max_cases is None else leads[:max_cases]
