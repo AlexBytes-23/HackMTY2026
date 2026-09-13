@@ -10,7 +10,8 @@ from src.verifier.official_verifier import (
     assess_efos_status_and_timing,
 )
 from src.rules.rule_registry import RuleRegistry
-from src.output.models import SubmissionFinding, SubmissionExhibit
+from src.output.models import (MoneyTrailStep, SubmissionFinding,
+                               SubmissionExhibit)
 
 
 def build_finding(
@@ -236,13 +237,56 @@ def build_finding(
         "these checks do not independently establish criminal intent."
     )
 
+    # 9. Money trail.
+    #
+    # The trail is built ONLY from records the verifier already resolved, and it
+    # states the one movement those exhibits actually establish: value passed
+    # from the audited receiver to the listed issuer, under the cited CFDI.
+    #
+    # It is deliberately a single step rather than one step per invoice. The
+    # official contract requires a CONNECTED trail (each step's destination is
+    # the next step's source); a fan of parallel company-to-vendor payments does
+    # not connect, and chaining them would draw a path the money never took.
+    # Settlement legs are not added here because no bank_txns record is among
+    # the authorised exhibits, and inventing an exhibit to draw a longer arrow
+    # is exactly the failure this layer exists to prevent.
+    money_trail: list[MoneyTrailStep] = []
+    dated_invoices: list[tuple[str, SubmissionExhibit, dict]] = []
+    for exhibit in exhibits:
+        if exhibit.source_table != "invoices":
+            continue
+        record = estate.get_record("invoices", exhibit.record_id)
+        if not record:
+            continue
+        issue_date = str(record.get("issue_date") or "").strip()
+        if issue_date:
+            dated_invoices.append((issue_date, exhibit, record))
+
+    if dated_invoices:
+        dated_invoices.sort(key=lambda item: (item[0], item[1].exhibit_id))
+        issue_date, exhibit, record = dated_invoices[0]
+        issuer = str(record.get("issuer_rfc") or "").strip()
+        receiver = str(record.get("receiver_rfc") or "").strip()
+        if issuer and receiver:
+            money_trail = [
+                MoneyTrailStep(
+                    **{
+                        "from": f"RFC:{receiver}",
+                        "to": f"RFC:{issuer}",
+                        "amount": amount,
+                        "date": issue_date,
+                        "exhibit_id": exhibit.exhibit_id,
+                    }
+                )
+            ]
+
     return SubmissionFinding(
         scheme_type="phantom_vendor",
         entities=entities,
         narrative=narrative,
         rule_broken=rule_broken,
         peso_amount=amount,
-        money_trail=[],
+        money_trail=money_trail,
         exhibits=exhibits,
         confidence="probable",
     )

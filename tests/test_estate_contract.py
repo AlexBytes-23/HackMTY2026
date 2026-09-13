@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import sqlite3
 import tempfile
 from pathlib import Path

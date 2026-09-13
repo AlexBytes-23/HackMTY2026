@@ -136,6 +136,41 @@ def _money_trail_svg(finding: BridgeFinding, settlements: list[dict]) -> str:
     y = 74
     x1, x2, x3 = 10, 10 + box_w + gap, 10 + (box_w + gap) * 2
 
+    # If the finding declares a money trail, draw THAT: it is the authorised
+    # statement about where value moved, and the exhibit on each step is the
+    # record it rests on. Only fall back to the documentary chain below when no
+    # trail was declared.
+    if finding.money_trail:
+        steps = finding.money_trail
+        n = len(steps) + 1
+        width2 = box_w * n + gap * (n - 1) + 20
+        parts2 = ['<svg viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" '
+                  'role="img" aria-label="Money trail diagram">' % (width2, height),
+                  '<defs><marker id="ah" markerWidth="9" markerHeight="9" refX="8" '
+                  'refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" '
+                  'fill="#b3332f"/></marker></defs>',
+                  '<text x="10" y="26" font-size="13" font-weight="700" '
+                  'fill="#0f2740">Money trail</text>',
+                  '<text x="10" y="44" font-size="10.5" fill="#5a6472">Each leg '
+                  'cites the exhibit it rests on.</text>']
+        nodes = [steps[0].source] + [s.destination for s in steps]
+        for i, node in enumerate(nodes):
+            nx = 10 + i * (box_w + gap)
+            is_end = i == len(nodes) - 1
+            parts2.append(box(nx, y, "Receiver" if i == 0 else "Recipient",
+                              [node], fill="#fbdedd" if is_end else "#ffffff",
+                              stroke="#b3332f" if is_end else "#2474c8"))
+        for i, step in enumerate(steps):
+            sx = 10 + i * (box_w + gap) + box_w
+            parts2.append(arrow(sx, y + box_h // 2, 10 + (i + 1) * (box_w + gap),
+                                "MXN %s" % _money(step.amount),
+                                "%s  -  %s" % (step.date, step.exhibit_id)))
+        parts2.append('<text x="10" y="%d" font-size="10" fill="#5a6472">Amounts '
+                      'are recomputed from the estate, never from the narrative.'
+                      '</text>' % (height - 12))
+        parts2.append("</svg>")
+        return "".join(parts2)
+
     settled_total = sum(float(s["amount"]) for s in settlements)
     parts = ['<svg viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg" '
              'role="img" aria-label="Money trail diagram">' % (width, height),

@@ -94,6 +94,15 @@ class BridgeExhibit:
 
 
 @dataclass
+class BridgeMoneyStep:
+    source: str
+    destination: str
+    amount: float
+    date: str
+    exhibit_id: str
+
+
+@dataclass
 class BridgeFinding:
     scheme_type: str
     entities: list[str]
@@ -102,6 +111,7 @@ class BridgeFinding:
     rule_broken: str
     narrative: str
     exhibits: list[BridgeExhibit]
+    money_trail: list[BridgeMoneyStep] = field(default_factory=list)
 
 
 @dataclass
@@ -454,7 +464,12 @@ def run_audit(estate_path: str | Path, out_dir: str | Path | None = None,
                 narrative=finding.narrative,
                 exhibits=[BridgeExhibit(e.exhibit_id, e.source_table,
                                         str(e.record_id), e.note)
-                          for e in finding.exhibits]))
+                          for e in finding.exhibits],
+                money_trail=[BridgeMoneyStep(
+                    source=step.from_entity, destination=step.to_entity,
+                    amount=float(step.amount), date=str(step.date),
+                    exhibit_id=step.exhibit_id)
+                    for step in (finding.money_trail or [])]))
 
         # ---- every lead that did not become a finding is declined ---------
         official_leads: list[LeadNotPursued] = []

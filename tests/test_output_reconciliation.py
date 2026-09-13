@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from src.core.estate import EstateRepository
 from src.core.models import EvidenceRef
 from src.output.reconciliation import reconcile_pesos

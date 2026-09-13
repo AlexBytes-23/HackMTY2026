@@ -1,4 +1,4 @@
-﻿import json
+import json
 import pytest
 from pydantic import BaseModel
 from src.core.models import CaseState, Hypothesis, CaseEvidence, EvidenceRef, ProposedAction, ActionRecord, Observation

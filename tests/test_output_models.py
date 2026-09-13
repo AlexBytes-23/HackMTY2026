@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from src.output.models import SubmissionFinding, SubmissionExhibit, MoneyTrailStep
 
 def create_valid_finding() -> dict:
