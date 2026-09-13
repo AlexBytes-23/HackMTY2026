@@ -472,3 +472,32 @@ def test_gemini_client_explicit_config_accepted():
     assert client.api_key == "test-key"
     assert client.model == "gemini-2.0-flash"
     assert client.provider == "gemini"
+
+
+# ==============================================================================
+# provider/model se leen de la grabación
+# ==============================================================================
+
+def test_replay_reads_provider_and_model_from_the_recording(tmp_path):
+    """Asumir un provider que no es el grabado convierte todo en replay miss."""
+    rec_file = tmp_path / "session.jsonl"
+
+    recorder = RecordingLLMClient(
+        MockProvider(response="grabado"),
+        recording_path=rec_file,
+        provider="scripted",
+        model="scripted-1",
+    )
+    recorder.complete("sys", "usr")
+
+    # Sin fijar provider ni model: ambos deben salir de la grabación.
+    replay = ReplayLLMClient(recording_path=rec_file)
+
+    assert replay.provider == "scripted"
+    assert replay.model == "scripted-1"
+    assert replay.complete("sys", "usr") == "grabado"
+
+
+def test_replay_refuses_to_guess_a_provider():
+    with pytest.raises(ValueError, match="requires 'provider'"):
+        ReplayLLMClient(records={"k": "v"}, model="m")

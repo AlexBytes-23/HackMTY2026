@@ -32,9 +32,13 @@ class ReplayLLMClient:
         self,
         recording_path: str | Path | None = None,
         records: dict[str, Sequence[str] | str] | None = None,
-        provider: str = "gemini",
+        provider: str | None = None,
         model: str | None = None,
     ):
+        # provider y model forman parte del request_key. Si se asume un provider
+        # que no es el de la grabación, TODA llamada resulta en replay miss aunque
+        # la grabación sea correcta. Por eso ambos se leen de la grabación cuando
+        # el llamador no los fija, y ninguno tiene un default silencioso.
         self.provider = provider
         self.model = model
         self.records: dict[str, deque[str]] = {}
@@ -63,10 +67,19 @@ class ReplayLLMClient:
                             self.records[k].append(resp)
                             if self.model is None and data.get("model"):
                                 self.model = data["model"]
+                            if self.provider is None and data.get("provider"):
+                                self.provider = data["provider"]
 
         if self.model is None:
             raise ValueError(
                 "ReplayLLMClient requires 'model' parameter or a recording containing 'model'."
+            )
+
+        if self.provider is None:
+            raise ValueError(
+                "ReplayLLMClient requires 'provider' parameter or a recording containing "
+                "'provider'. Guessing a provider silently would turn every request into "
+                "a replay miss."
             )
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:

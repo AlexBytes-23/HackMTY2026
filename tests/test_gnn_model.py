@@ -2,6 +2,13 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
+# El subsistema GNN es opcional (requirements-gnn.txt). Sin torch instalado estos
+# modulos deben SALTARSE, no romper la coleccion completa de pytest.
+pytest.importorskip("torch")
+pytest.importorskip("torch_geometric")
+
 import torch
 from torch_geometric.data import HeteroData
 

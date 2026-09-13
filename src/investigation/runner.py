@@ -24,6 +24,25 @@ from src.investigation.investigator import (
     investigate_case,
 )
 
+def _merge_evidence_ids(
+    existing_ids: list[str],
+    incoming_ids: list[str],
+) -> list[str]:
+    """
+    Une dos listas de evidence_ids preservando
+    el orden y sin duplicar.
+    """
+
+    merged = list(existing_ids)
+
+    for evidence_id in incoming_ids:
+
+        if evidence_id not in merged:
+            merged.append(evidence_id)
+
+    return merged
+
+
 def _merge_hypotheses(
     existing: list[Hypothesis],
     incoming: list[Hypothesis],
@@ -31,6 +50,15 @@ def _merge_hypotheses(
     """
     Actualiza hipótesis por ID sin borrar
     silenciosamente hipótesis anteriores.
+
+    El Investigator SÍ puede reformular el enunciado,
+    el scheme_type o el status de una hipótesis.
+
+    Lo que NO puede hacer es des-citar evidencia que
+    Python ya registró: omitir un evidence_id en la
+    respuesta del LLM no es una decisión forense, es
+    una omisión. Por eso las listas de evidencia se
+    unen en lugar de reemplazarse.
     """
 
     merged = {
@@ -40,11 +68,111 @@ def _merge_hypotheses(
     }
 
     for hypothesis in incoming:
-        merged[hypothesis.hypothesis_id] = (
+
+        updated_hypothesis = (
             hypothesis.model_copy(deep=True)
         )
 
+        previous = merged.get(
+            hypothesis.hypothesis_id
+        )
+
+        if previous is not None:
+
+            updated_hypothesis.supporting_evidence_ids = (
+                _merge_evidence_ids(
+                    previous.supporting_evidence_ids,
+                    updated_hypothesis.supporting_evidence_ids,
+                )
+            )
+
+            updated_hypothesis.counter_evidence_ids = (
+                _merge_evidence_ids(
+                    previous.counter_evidence_ids,
+                    updated_hypothesis.counter_evidence_ids,
+                )
+            )
+
+        merged[hypothesis.hypothesis_id] = (
+            updated_hypothesis
+        )
+
     return list(merged.values())
+
+
+def _make_case_evidence_citable(
+    case_state: CaseState,
+) -> list[str]:
+    """
+    Garantiza que toda evidencia del caso sea CITABLE
+    por las hipótesis vivas del caso.
+
+    Por qué hace falta:
+
+    El Verifier sólo mira supporting_evidence_ids. Pero
+    el LLM no puede mantener esa lista por sí solo:
+
+    - Los evidence_id de las acciones los acuña Python
+      DESPUÉS de que el Investigator decidió, así que el
+      ID todavía no existe cuando el modelo responde.
+    - La evidencia semilla (las observaciones que abrieron
+      el Lead) se pierde en cuanto el modelo devuelve una
+      hipótesis nueva con la lista vacía.
+
+    En ambos casos la evidencia quedaba huérfana y el caso
+    moría en el gate por "fewer than 3 valid unique exhibits",
+    aunque los registros estuvieran ahí.
+
+    Qué NO es esto:
+
+    No es una autorización, ni una valoración, ni una
+    afirmación de que el registro sostenga la hipótesis.
+    Sólo lo vuelve citable. El verificador determinista
+    sigue siendo el único que decide si el registro prueba
+    algo, y el gate sigue fallando cerrado.
+
+    Se respeta la designación explícita del LLM: si ya marcó
+    una evidencia como contraria, no se mueve a soporte.
+
+    Devuelve los hypothesis_id afectados, para el rastro
+    auditable.
+    """
+
+    all_evidence_ids = [
+        evidence.evidence_id
+        for evidence in case_state.evidence
+    ]
+
+    attached_to: list[str] = []
+
+    for hypothesis in case_state.hypotheses:
+
+        if hypothesis.status not in {"open", "supported"}:
+            continue
+
+        changed = False
+
+        for evidence_id in all_evidence_ids:
+
+            if evidence_id in hypothesis.supporting_evidence_ids:
+                continue
+
+            # El LLM la declaró contraria: se queda ahí.
+            if evidence_id in hypothesis.counter_evidence_ids:
+                continue
+
+            hypothesis.supporting_evidence_ids.append(
+                evidence_id
+            )
+
+            changed = True
+
+        if changed:
+            attached_to.append(
+                hypothesis.hypothesis_id
+            )
+
+    return attached_to
 
 
 def _action_signature(
@@ -101,6 +229,11 @@ def apply_investigator_decision(
     incoming=decision.hypotheses,
     )
 
+    # Una hipótesis nueva llega con la lista de evidencia vacía,
+    # así que la evidencia semilla del Lead quedaría huérfana.
+    # Ver _make_case_evidence_citable.
+    _make_case_evidence_citable(updated)
+
     resolved = set(
     decision.resolved_unknowns
     )
@@ -147,6 +280,8 @@ def apply_investigator_decision(
 
         produced_evidence_ids: list[str] = []
 
+        attached_to_hypotheses: list[str] = []
+
         # --------------------------------------------------------
         # Ejecutar una consulta correctamente NO significa que haya
         # producido evidencia positiva del estate. Un resultado vacío
@@ -177,10 +312,33 @@ def apply_investigator_decision(
                 evidence_id
             )
 
+            # --------------------------------------------------------
+            # Hacer citable lo que acabamos de obtener.
+            # Ver _make_case_evidence_citable.
+            # --------------------------------------------------------
+
+            attached_to_hypotheses = (
+                _make_case_evidence_citable(
+                    updated
+                )
+            )
+
 
         # --------------------------------------------------------
         # Siempre guardamos el intento, funcione o no.
         # --------------------------------------------------------
+
+        # Dejamos por escrito a qué hipótesis quedó citada
+        # la evidencia. El rastro debe permitir reconstruir
+        # por qué el Verifier vio un exhibit concreto.
+        result_summary = result.summary
+
+        if attached_to_hypotheses:
+            result_summary = (
+                f"{result_summary} "
+                "Registro citable para la(s) hipótesis "
+                f"{', '.join(attached_to_hypotheses)}."
+            )
 
         action_record = ActionRecord(
             step=step,
@@ -190,7 +348,7 @@ def apply_investigator_decision(
             question_resolved=(
                 proposed.question_resolved
             ),
-            result_summary=result.summary,
+            result_summary=result_summary,
             result_data=result.data,
             success=result.success,
             errors=result.errors,
