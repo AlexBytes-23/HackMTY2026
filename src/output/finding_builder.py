@@ -5,7 +5,10 @@ import math
 from src.core.models import CaseState, EvidenceRef
 from src.core.estate import EstateRepository
 from src.gates.evidence_gate import EvidenceGateDecision
-from src.verifier.official_verifier import VerificationReport
+from src.verifier.official_verifier import (
+    VerificationReport,
+    assess_efos_status_and_timing,
+)
 from src.rules.rule_registry import RuleRegistry
 from src.output.models import SubmissionFinding, SubmissionExhibit
 
@@ -188,10 +191,40 @@ def build_finding(
 
     # 8. Narrative reports only the facts established by the deterministic checks.
     matched_text = ", ".join(sorted(matched_rfcs))
+
+    # The timing relationship is re-derived from the estate, never from prose: the
+    # same deterministic assessment the verifier ran.  It is stated only when the
+    # supplied records actually establish it; otherwise the sentence is omitted
+    # rather than softened into an unsupported claim.
+    timing_sentence = ""
+    assessment = assess_efos_status_and_timing(
+        estate,
+        [ref for ref in unique_refs.values() if ref.source_table == "efos_list"],
+        [ref for ref in unique_refs.values() if ref.source_table == "invoices"],
+    )
+    if assessment.status == "verified":
+        published = sorted(set(assessment.publication_dates.values()))
+        issued = assessment.qualifying_invoice_dates
+        # Ranges, not full lists: the official validator counts narrative words.
+        published_text = (
+            published[0]
+            if len(published) == 1
+            else f"between {published[0]} and {published[-1]}"
+        )
+        issued_text = (
+            issued[0] if len(issued) == 1 else f"between {issued[0]} and {issued[-1]}"
+        )
+        timing_sentence = (
+            "Those efos_list records carry a definitive listing status published "
+            f"{published_text}, and every cited invoice counted here was issued on "
+            f"or after that publication date ({issued_text}). "
+        )
+
     narrative = (
         f"The cited invoice issuer RFC(s) {matched_text} also appear in the cited "
         "efos_list records. "
-        f"The claimed amount of MXN {amount:,.2f} reconciles deterministically to "
+        + timing_sentence
+        + f"The claimed amount of MXN {amount:,.2f} reconciles deterministically to "
         "the cited records. "
         "This finding is reported with probable confidence under the selected rule; "
         "these checks do not independently establish criminal intent."

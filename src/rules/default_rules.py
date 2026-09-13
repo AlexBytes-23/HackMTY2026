@@ -76,9 +76,11 @@ RULE_CFF_69B = RuleDefinition(
     ],
     exceptions=[
         (
-            "El propio articulo 69-B preve que el contribuyente desvirtue la "
-            "presuncion; un registro con estatus de desvirtuado o con sentencia "
-            "favorable no sostiene la imputacion."
+            "La tabla efos_list del estate solo admite dos estatus: 'definitivo' "
+            "y 'presunto'. Un registro con estatus 'presunto' documenta una "
+            "presuncion que el contribuyente aun puede desvirtuar en los terminos "
+            "del propio articulo 69-B, y por si solo no sostiene una imputacion "
+            "definitiva; unicamente el estatus 'definitivo' la sostiene."
         ),
         (
             "La presuncion opera a partir de la publicacion definitiva; "
