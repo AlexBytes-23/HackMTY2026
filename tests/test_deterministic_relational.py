@@ -189,6 +189,8 @@ class FakeEstate:
                         "from_clabe": "111111111111111111",
                         "to_clabe": "222222222222222222",
                         "amount": 10000.0,
+                        "reference": "test transfer",
+                        "channel": "SPEI",
                     }
                 ]
             ),

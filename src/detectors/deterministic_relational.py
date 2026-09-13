@@ -15,6 +15,7 @@ import pandas as pd
 
 from src.core.estate import EstateRepository
 from src.core.models import EvidenceRef, Observation
+from src.graph.bank_graph import build_bank_multidigraph, find_directed_bank_cycles
 
 
 def _clean_text(value) -> str | None:
@@ -327,6 +328,108 @@ def detect_short_window_similar_invoice_clusters(
     return observations
 
 
+
+def detect_directed_bank_transfer_cycles(
+    bank_txns: pd.DataFrame,
+    *,
+    max_cycle_length: int = 4,
+    max_cycles: int = 50,
+) -> list[Observation]:
+    """Surface bounded directed transfer cycles as structural observations.
+
+    A directed cycle establishes that the supplied estate contains transfers
+    along every directed arc in the cycle.  It does *not* establish that the
+    same funds traversed the cycle, nor does it establish fraudulent intent.
+    """
+
+    graph = build_bank_multidigraph(bank_txns)
+    cycles = find_directed_bank_cycles(
+        graph,
+        max_cycle_length=max_cycle_length,
+        max_cycles=max_cycles,
+    )
+
+    observations: list[Observation] = []
+    for cycle in cycles:
+        txn_ids = list(cycle.transaction_ids)
+        account_path = list(cycle.closed_account_path)
+        amounts = list(cycle.amounts)
+        dates = list(cycle.dates)
+
+        observations.append(
+            Observation(
+                observation_id=_observation_id(
+                    "BANK-CYCLE",
+                    *cycle.accounts,
+                    *txn_ids,
+                ),
+                detector_name="deterministic_relational",
+                signal_type="directed_bank_transfer_cycle",
+                entities=[f"CLABE:{clabe}" for clabe in cycle.accounts],
+                statement=(
+                    "The supplied estate contains a directed cycle of recorded "
+                    f"bank transfers across {len(cycle.accounts)} CLABEs."
+                ),
+                evidence=[
+                    EvidenceRef(source_table="bank_txns", record_id=txn_id)
+                    for txn_id in txn_ids
+                ],
+                facts={
+                    "account_cycle": account_path,
+                    "transaction_ids": txn_ids,
+                    "transaction_dates": dates,
+                    "transaction_amounts": amounts,
+                    "date_span_days": cycle.date_span_days,
+                    "detection_parameters": {
+                        "max_cycle_length": max_cycle_length,
+                        "max_cycles": max_cycles,
+                    },
+                },
+                score=None,
+                score_semantics=None,
+                limitations=[
+                    (
+                        "A directed transfer cycle is a structural fact, but it "
+                        "does not prove that the same funds returned to their "
+                        "origin or that the activity is round-tripping fraud."
+                    ),
+                    (
+                        "The official bank data provides dates but not intraday "
+                        "timestamps, so transfers sharing a date cannot be ordered "
+                        "within that day from this estate alone."
+                    ),
+                    (
+                        "CLABE nodes may lack known ownership in the supplied estate."
+                    ),
+                    (
+                        "Cycle discovery is intentionally bounded by max_cycle_length "
+                        "and max_cycles; additional structural cycles may exist."
+                    ),
+                ],
+                legitimate_alternatives=[
+                    "Legitimate reciprocal payments or settlements between parties.",
+                    "Treasury, cash-pooling, refund, or intercompany activity.",
+                    "Multiple economically distinct transfers that only form a structural cycle.",
+                ],
+                recommended_checks=[
+                    (
+                        "Identify the owners and business roles of every CLABE in "
+                        "the cycle using estate records and available documentation."
+                    ),
+                    (
+                        "Compare transfer amounts and dates and inspect supporting "
+                        "invoices, purchase orders, contracts, and ledger entries."
+                    ),
+                    (
+                        "Do not construct a verified money trail until continuity "
+                        "of the claimed funds is independently supported."
+                    ),
+                ],
+            )
+        )
+
+    return observations
+
 def run_deterministic_relational_detectors(
     estate: EstateRepository,
 ) -> list[Observation]:
@@ -348,6 +451,11 @@ def run_deterministic_relational_detectors(
     observations.extend(
         detect_short_window_similar_invoice_clusters(
             invoices=invoices,
+        )
+    )
+    observations.extend(
+        detect_directed_bank_transfer_cycles(
+            bank_txns=bank_txns,
         )
     )
     return observations
