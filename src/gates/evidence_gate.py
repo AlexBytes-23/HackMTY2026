@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
-
-from typing import Literal, Any
+from __future__ import annotations
+from typing import Literal
 from pydantic import BaseModel, Field
 
-from src.core.models import VerifiedFact, EvidenceRef
-from src.core.estate import EstateRepository
+from src.core.models import CaseState
+from src.agents.challenger import ChallengerOutcome, ChallengerReview
+from src.agents.method_critic import MethodCriticOutcome, MethodCriticReview
+from src.verifier.official_verifier import VerificationReport
 from src.rules.rule_registry import RuleRegistry
 
 GateOutcome = Literal[
@@ -18,120 +19,150 @@ GateOutcome = Literal[
 class EvidenceGateDecision(BaseModel):
     target_hypothesis_id: str
     outcome: GateOutcome
-    authorized_confidence: Literal["probable", "proven"] | None
+    authorized_confidence: Literal["probable", "proven"] | None = None
     satisfied_requirements: list[str] = Field(default_factory=list)
     failed_requirements: list[str] = Field(default_factory=list)
     unresolved_material_questions: list[str] = Field(default_factory=list)
     reason: str
 
-class GateContext(BaseModel):
-    target_hypothesis_id: str
-    target_hypothesis_exists: bool = True
-    target_hypothesis_rejected: bool = False
-    scheme_type: str | None = None
-    
-    critical_verified_facts: list[VerifiedFact] = Field(default_factory=list)
-    auxiliary_verified_facts: list[VerifiedFact] = Field(default_factory=list)
-    
-    challenger_needs_more_evidence: bool = False
-    unresolved_legitimate_alternatives: list[str] = Field(default_factory=list)
-    resolved_legitimate_alternative: bool = False
-    unresolved_alternative_hypothesis_materially_affects: bool = False
-    
-    material_method_objections: list[str] = Field(default_factory=list)
-    strong_unresolved_contradictions: list[str] = Field(default_factory=list)
-    material_unanswered_questions: list[str] = Field(default_factory=list)
-    
-    proposed_exhibits: list[EvidenceRef] = Field(default_factory=list)
-    
-    claimed_peso_amount: float | None = None
-    reconciled_peso_amount: float | None = None
-    
-    requested_rule_id: str | None = None
-    
+def evaluate_gate(
+    case_state: CaseState,
+    target_hypothesis_id: str,
+    challenger_review: ChallengerReview | None,
+    method_critic_review: MethodCriticReview | None,
+    verification_report: VerificationReport | None,
+    rule_registry: RuleRegistry,
+    requested_rule_id: str | None = None,
     useful_actions_remain: bool = False
+) -> EvidenceGateDecision:
 
+    decision = EvidenceGateDecision(
+        target_hypothesis_id=target_hypothesis_id,
+        outcome="inconclusive",
+        reason=""
+    )
 
-class EvidenceGate:
-    def __init__(self, estate: EstateRepository, registry: RuleRegistry):
-        self.estate = estate
-        self.registry = registry
-        
-    def decide(self, context: GateContext) -> EvidenceGateDecision:
-        decision = EvidenceGateDecision(
-            target_hypothesis_id=context.target_hypothesis_id,
-            outcome="inconclusive",
-            authorized_confidence=None,
-            reason=""
-        )
-        
-        # Validation checks
-        if not context.target_hypothesis_exists:
-            decision.failed_requirements.append("target hypothesis does not exist")
-        if context.target_hypothesis_rejected:
-            decision.failed_requirements.append("target hypothesis is already rejected")
-        if not context.scheme_type:
-            decision.failed_requirements.append("scheme_type is missing")
-        if context.challenger_needs_more_evidence:
-            decision.failed_requirements.append("Challenger outcome is needs_more_evidence")
-        if context.unresolved_legitimate_alternatives:
-            decision.failed_requirements.append("unresolved legitimate alternative remains")
-        if context.unresolved_alternative_hypothesis_materially_affects:
-            decision.failed_requirements.append("unresolved alternative hypothesis materially affects the target conclusion")
-        if context.material_method_objections:
-            decision.failed_requirements.append("material Method Critic objection remains")
-            
-        for fact in context.critical_verified_facts:
-            if not fact.verified:
-                decision.failed_requirements.append(f"explicitly critical VerifiedFact failed verification: {fact.fact_id}")
-                
-        if context.strong_unresolved_contradictions:
-            decision.failed_requirements.append("strong contradiction remains unresolved")
-        if context.material_unanswered_questions:
-            decision.failed_requirements.append("material unanswered question remains")
-            for q in context.material_unanswered_questions:
-                decision.unresolved_material_questions.append(q)
-                
-        if len(context.proposed_exhibits) < 3:
-            decision.failed_requirements.append("fewer than 3 valid exhibits exist")
-            
-        for exhibit in context.proposed_exhibits:
-            try:
-                exists = self.estate.record_exists(exhibit.source_table, exhibit.record_id)
-                if not exists:
-                    decision.failed_requirements.append(f"an exhibit points to a record that does not exist: {exhibit.source_table}.{exhibit.record_id}")
-            except ValueError:
-                decision.failed_requirements.append(f"invalid source table in exhibit: {exhibit.source_table}")
-
-        if context.claimed_peso_amount is None or context.reconciled_peso_amount is None or context.claimed_peso_amount != context.reconciled_peso_amount:
-            decision.failed_requirements.append("peso_amount is unsupported or fails deterministic reconciliation")
-            
-        if context.requested_rule_id:
-            rule = self.registry.get_rule(context.requested_rule_id)
-            if not rule:
-                decision.failed_requirements.append("requested rule_id is not valid in the Rule Registry")
-        else:
-            decision.failed_requirements.append("requested rule_id is missing or not valid")
-
-        if decision.failed_requirements or context.resolved_legitimate_alternative:
-            if context.resolved_legitimate_alternative or context.target_hypothesis_rejected:
-                decision.outcome = "decline_hypothesis"
-                decision.reason = "Hypothesis explicitly declined or resolved legitimate alternative exists."
-            elif context.useful_actions_remain:
-                decision.outcome = "need_more_work"
-                decision.reason = "There are missing requirements, but useful actions remain."
-            else:
-                decision.outcome = "inconclusive"
-                decision.reason = "Evidence is insufficient but no reasonable available action can resolve the remaining material uncertainty."
-            return decision
-            
-        # If we got here, all requirements are satisfied
-        decision.satisfied_requirements = ["All deterministic checks passed."]
-        
-        # PROVEN POLICY Check
-        # For now, without a specific standard mechanism implemented, we authorize probable.
-        decision.outcome = "authorize_probable"
-        decision.authorized_confidence = "probable"
-        decision.reason = "All evidence criteria satisfied. Authorizing probable. No explicit scheme-specific proven standard implemented yet."
-        
+    # 1. Target Hypothesis state
+    hypothesis = next((h for h in case_state.hypotheses if h.hypothesis_id == target_hypothesis_id), None)
+    if not hypothesis:
+        decision.failed_requirements.append("target hypothesis does not exist")
+        decision.reason = "Hypothesis missing."
         return decision
+
+    if hypothesis.status == "rejected":
+        decision.outcome = "decline_hypothesis"
+        decision.failed_requirements.append("target hypothesis is already rejected")
+        decision.reason = "Hypothesis is explicitly rejected."
+        return decision
+
+    # 2. Rule Context
+    if requested_rule_id:
+        rule = rule_registry.get_rule(requested_rule_id)
+        if not rule:
+            decision.failed_requirements.append("requested rule_id is not valid in the Rule Registry")
+        else:
+            # Enforce applicability securely
+            if not hypothesis.scheme_type:
+                decision.failed_requirements.append("target hypothesis has no scheme_type")
+            elif not rule.applies_to:
+                decision.failed_requirements.append("requested rule has empty applies_to")
+            elif hypothesis.scheme_type not in rule.applies_to:
+                decision.failed_requirements.append(f"requested rule_id {requested_rule_id} does not apply to scheme_type {hypothesis.scheme_type}")
+    else:
+        decision.failed_requirements.append("requested rule_id is missing or not valid")
+
+    # 3. Challenger Review
+    if not challenger_review:
+        decision.failed_requirements.append("ChallengerReview is mandatory but missing")
+    else:
+        if challenger_review.outcome == "needs_more_evidence":
+            decision.failed_requirements.append("Challenger outcome is needs_more_evidence")
+        elif challenger_review.outcome == "legitimate_alternative":
+            decision.outcome = "decline_hypothesis"
+            decision.failed_requirements.append("Challenger identified a resolved legitimate alternative")
+            decision.reason = "Hypothesis explicitly declined due to legitimate alternative."
+            return decision
+        elif challenger_review.outcome == "alternative_hypothesis":
+            decision.failed_requirements.append("Challenger identified an alternative hypothesis")
+
+    # 4. Method Critic Review
+    if not method_critic_review:
+        decision.failed_requirements.append("MethodCriticReview is mandatory but missing")
+    else:
+        if method_critic_review.outcome == "needs_more_work":
+            decision.failed_requirements.append("Method Critic outcome is needs_more_work")
+        elif method_critic_review.outcome == "cannot_support":
+            decision.failed_requirements.append("Method Critic outcome is cannot_support")
+
+    # 5. Verification Report checks
+    if not verification_report:
+        decision.failed_requirements.append("verification_report is missing")
+    else:
+        if verification_report.target_hypothesis_id != target_hypothesis_id:
+            decision.failed_requirements.append("VerificationReport target hypothesis does not match Gate target")
+
+        if verification_report.internal_errors:
+            decision.failed_requirements.append("VerificationReport contains internal errors")
+
+        if not verification_report.checks:
+            decision.failed_requirements.append("VerificationReport contains no checks")
+
+        unique_exhibits = set((ref.source_table, str(ref.record_id)) for ref in verification_report.resolved_exhibits)
+        if len(unique_exhibits) < 3:
+            decision.failed_requirements.append(f"fewer than 3 valid unique exhibits exist (found {len(unique_exhibits)})")
+
+        reconciles = False
+        if (verification_report.reconciliation and verification_report.reconciliation.get("reconciles") is True):
+            reconciles = True
+
+        if not reconciles:
+            decision.failed_requirements.append("peso_amount is unsupported or fails deterministic reconciliation")
+
+        has_verified_peso = False
+        has_verified_phantom = False
+
+        for check in verification_report.checks:
+            if check.critical:
+                if check.status == "failed":
+                    decision.failed_requirements.append(f"Critical check failed: {check.check_id}")
+                elif check.status == "unresolved":
+                    decision.failed_requirements.append(f"Critical check unresolved: {check.check_id}")
+                elif check.status == "verified":
+                    if check.check_id == "PESO-RECONCILIATION":
+                        has_verified_peso = True
+                    elif check.check_id == "PHANTOM-EFOS-INVOICE-LINK":
+                        has_verified_phantom = True
+
+        if not has_verified_peso:
+            decision.failed_requirements.append("VerificationReport lacks a critical verified PESO-RECONCILIATION check")
+
+        # Substantive scheme verification
+        if hypothesis.scheme_type == "phantom_vendor":
+            if not has_verified_phantom:
+                decision.failed_requirements.append("VerificationReport lacks a critical verified PHANTOM-EFOS-INVOICE-LINK check")
+        elif hypothesis.scheme_type:
+            decision.failed_requirements.append(f"No supported deterministic substantive verifier exists for scheme_type {hypothesis.scheme_type}")
+
+    # Resolution
+    if decision.failed_requirements:
+        # Determine the most conservative blocking outcome
+        if challenger_review and challenger_review.outcome == "legitimate_alternative":
+            decision.outcome = "decline_hypothesis"
+            decision.reason = "Resolved legitimate alternative exists."
+        elif method_critic_review and method_critic_review.outcome == "cannot_support":
+            decision.outcome = "inconclusive"
+            decision.reason = "Method Critic structurally cannot support."
+        elif useful_actions_remain or (challenger_review and challenger_review.outcome == "needs_more_evidence") or (method_critic_review and method_critic_review.outcome == "needs_more_work") or (not challenger_review) or (not method_critic_review):
+            decision.outcome = "need_more_work"
+            decision.reason = "Repairable missing evidence or objections exist."
+        else:
+            decision.outcome = "inconclusive"
+            decision.reason = "Evidence is insufficient but no reasonable available action can resolve the remaining material uncertainty."
+        return decision
+
+    decision.satisfied_requirements = ["All deterministic checks passed."]
+    decision.outcome = "authorize_probable"
+    decision.authorized_confidence = "probable"
+    decision.reason = "All evidence criteria satisfied. Authorizing probable. No explicit scheme-specific proven standard implemented yet."
+
+    return decision
