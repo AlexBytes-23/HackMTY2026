@@ -17,13 +17,22 @@ class MethodCriticReview(BaseModel):
     outcome: MethodCriticOutcome
     
     problematic_assumptions: list[str] = Field(default_factory=list)
-    evidence_dependencies: list[str] = Field(default_factory=list)
+    evidence_dependency_risks: list[str] = Field(default_factory=list)
     confirmation_bias_risks: list[str] = Field(default_factory=list)
     selection_or_window_bias: list[str] = Field(default_factory=list)
     rule_misuse: list[str] = Field(default_factory=list)
     source_completeness_risks: list[str] = Field(default_factory=list)
     entity_resolution_risks: list[str] = Field(default_factory=list)
     missing_alternative_methods: list[str] = Field(default_factory=list)
+    
+    material_blockers: list[str] = Field(
+        default_factory=list,
+        description="Explicit blockers explaining why current methodology CANNOT be repaired with available tools (cannot_support)."
+    )
+    non_material_notes: list[str] = Field(
+        default_factory=list,
+        description="Minor observations that do not block a 'clear' outcome."
+    )
     
     proposed_actions: list[ProposedAction] = Field(default_factory=list)
     reasoning_summary: str
@@ -40,33 +49,56 @@ class MethodCriticReview(BaseModel):
     
     @model_validator(mode="after")
     def validate_outcome_requirements(self) -> "MethodCriticReview":
-        if self.outcome == "needs_more_work":
+        material_lists = [
+            self.problematic_assumptions, self.evidence_dependency_risks,
+            self.confirmation_bias_risks, self.selection_or_window_bias,
+            self.rule_misuse, self.source_completeness_risks,
+            self.entity_resolution_risks, self.missing_alternative_methods,
+            self.material_blockers
+        ]
+        has_material_objections = any(len(lst) > 0 for lst in material_lists)
+        
+        if self.outcome == "clear":
+            if has_material_objections:
+                raise ValueError("outcome 'clear' cannot contain material objections or blockers. Use non_material_notes for minor issues.")
+                
+        elif self.outcome == "needs_more_work":
             if not self.proposed_actions:
                 raise ValueError("needs_more_work requires at least one proposed_actions item.")
+                
+        elif self.outcome == "cannot_support":
+            if not self.material_blockers:
+                raise ValueError("cannot_support requires at least one explicit material_blockers item explaining why it cannot be repaired.")
+                
         return self
+
+
+class MethodCriticResult(BaseModel):
+    review: MethodCriticReview
+    deterministic_dependencies: list[dict[str, Any]]
 
 
 def find_evidence_dependencies(case_state: CaseState) -> list[dict[str, Any]]:
     """
     Deterministically find overlapping source references among evidence items.
     """
-    ref_to_evidence: dict[tuple[str, str], list[str]] = {}
+    ref_to_evidence: dict[tuple[str, str], set[str]] = {}
     
     for evidence in case_state.evidence:
         for ref in evidence.source_refs:
             key = (ref.source_table, ref.record_id)
             if key not in ref_to_evidence:
-                ref_to_evidence[key] = []
-            ref_to_evidence[key].append(evidence.evidence_id)
+                ref_to_evidence[key] = set()
+            ref_to_evidence[key].add(evidence.evidence_id)
             
     dependencies = []
     
-    for key, ev_ids in ref_to_evidence.items():
-        if len(ev_ids) > 1:
+    for key, ev_ids_set in ref_to_evidence.items():
+        if len(ev_ids_set) > 1:
             dependencies.append({
                 "shared_source_table": key[0],
                 "shared_record_id": key[1],
-                "evidence_ids_involved": sorted(list(set(ev_ids))),
+                "evidence_ids_involved": sorted(list(ev_ids_set)),
                 "warning": "These evidence items share the exact same underlying record and cannot automatically be treated as independent corroboration."
             })
             
@@ -108,9 +140,9 @@ You must NEVER decide guilt, fraud, confidence level, probable/proven, or Findin
 11. Propose a real action ONLY when it can materially resolve the weakness. Do not propose actions that do not exist in the available actions list.
 
 === EXPECTED OUTCOME ===
-- "clear": No material methodological objection remains using the available case state, tools, and supplied rule context. (Does NOT mean hypothesis is correct/proven).
+- "clear": No material methodological objection remains using the available case state, tools, and supplied rule context. (Does NOT mean hypothesis is correct/proven. You must NOT include material objections).
 - "needs_more_work": A material methodological weakness exists and at least one concrete available action can reasonably address it. (MUST propose at least one action).
-- "cannot_support": The current hypothesis cannot be methodologically supported from the available estate/tools because a material defect cannot reasonably be repaired with another available action.
+- "cannot_support": The current hypothesis cannot be methodologically supported from the available estate/tools because a material defect cannot reasonably be repaired with another available action. (MUST provide a material blocker).
 
 Do NOT duplicate the Challenger (e.g. do not invent legitimate alternative business stories).
 Do NOT duplicate the Verifier (do not recalculate final monetary facts).
@@ -121,18 +153,39 @@ You must return a valid JSON object matching the requested schema.
 """
 
 
+def _safe_serialize(items: list[Any]) -> list[Any]:
+    safe_items = []
+    for item in items:
+        if hasattr(item, "model_dump"):
+            safe_items.append(item.model_dump())
+        elif hasattr(item, "__dict__"):
+            safe_items.append(item.__dict__)
+        else:
+            safe_items.append(item)
+    return safe_items
+
+
 def build_method_critic_prompt(
     case_state: CaseState,
     target_hypothesis_id: str,
-    available_actions: list[Any]
+    available_actions: list[Any],
+    rule_context: list[Any] | None = None
 ) -> str:
     dependencies = find_evidence_dependencies(case_state)
+    
+    safe_actions = _safe_serialize(available_actions)
+    
+    if rule_context is None:
+        rule_context_str = "No explicit rule context supplied. Normative, legal, or threshold-based claims CANNOT be validated."
+    else:
+        rule_context_str = _safe_serialize(rule_context)
     
     context = {
         "target_hypothesis_id": target_hypothesis_id,
         "case_state": case_state.model_dump(),
         "deterministic_dependency_analysis": dependencies,
-        "available_actions": available_actions,
+        "available_actions": safe_actions,
+        "rule_context": rule_context_str,
         "schema": MethodCriticReview.model_json_schema()
     }
     
@@ -141,7 +194,6 @@ def build_method_critic_prompt(
 
 def parse_method_critic_review(text: str) -> MethodCriticReview:
     try:
-        # Strip potential markdown code block formatting
         text = text.strip()
         if text.startswith("```json"):
             text = text[7:]
@@ -169,7 +221,6 @@ def _required_arguments(action: Any) -> set[str]:
     return set()
 
 
-
 def validate_method_critic_review(
     review: MethodCriticReview,
     *,
@@ -182,6 +233,7 @@ def validate_method_critic_review(
         raise ValueError(
             f"Target hypothesis ID {target_hypothesis_id!r} not found in case state."
         )
+
     if review.target_hypothesis_id != target_hypothesis_id:
         raise ValueError(
             "Method Critic reviewed a different hypothesis than requested: "
@@ -224,9 +276,15 @@ def criticize_method(
     llm_client: LLMClient,
     case_state: CaseState,
     target_hypothesis_id: str,
-    available_actions: list[Any]
-) -> MethodCriticReview:
-    prompt = build_method_critic_prompt(case_state, target_hypothesis_id, available_actions)
+    available_actions: list[Any],
+    rule_context: list[Any] | None = None
+) -> MethodCriticResult:
+    prompt = build_method_critic_prompt(
+        case_state, 
+        target_hypothesis_id, 
+        available_actions,
+        rule_context
+    )
     
     response_text = llm_client.complete(
         system_prompt=METHOD_CRITIC_PROMPT,
@@ -242,6 +300,8 @@ def criticize_method(
         available_actions=available_actions
     )
     
-    return review
-
-
+    dependencies = find_evidence_dependencies(case_state)
+    return MethodCriticResult(
+        review=review,
+        deterministic_dependencies=dependencies
+    )
