@@ -389,13 +389,40 @@ _REVENUE_ACCOUNT = ("4000", "Ingresos por ventas")
 _NO_APPROVER = "Sin autorizacion registrada"
 
 
+# Two decoy scenarios are deliberate NEGATIVE CONTROLS: no detector in the
+# current system emits a signal for their shape, and that is the correct
+# behaviour rather than a gap to close.  Their answer-key entries carry
+# ``negative_control: True`` and say so in the ``signal`` field, so a scoring
+# harness never credits a detector that does not exist.
+NO_DETECTOR_SHARED_BANK_PREFIX = (
+    "no detector fires: detect_vendor_employee_shared_clabe requires full "
+    "18-digit CLABE equality, so a shared three-digit bank code emits no "
+    "signal in the current system"
+)
+
+NO_DETECTOR_PERIOD_END_CANCELLATION = (
+    "no detector fires: the current system has no period-end "
+    "revenue-cancellation detector, so this shape emits no signal"
+)
+
+
 # ==========================================================================
 # PUBLIC SPEC
 # ==========================================================================
 
 @dataclass(frozen=True)
 class EstateSpec:
-    """What to plant in one generated estate."""
+    """What to plant in one generated estate.
+
+    ``n_decoys`` counts decoy *scenarios*, not answer-key entries.  A scenario
+    that leaves more than one innocent entity exposed to a detector records one
+    entry per entity, because every detector-flagged entity must be
+    attributable or a scoring harness books it as a false positive it cannot
+    explain.  ``len(ground_truth["decoys"])`` therefore need not equal
+    ``n_decoys``: the default ten scenarios record twelve entries, and asking
+    for more scenarios than exist repeats them without recording any entity
+    twice.
+    """
 
     seed: int
     n_honest_vendors: int = 18
@@ -1207,7 +1234,10 @@ class _EstateBuilder:
     # ------------------------------------------------------------------
 
     def _build_decoys(self) -> None:
-        builders: tuple[Callable[[], dict[str, Any]], ...] = (
+        # One callable per decoy scenario.  A scenario returns one entry per
+        # innocent entity it exposes to a detector, so a scenario that makes two
+        # RFCs visible records two entries.
+        builders: tuple[Callable[[], list[dict[str, Any]]], ...] = (
             self._decoy_efos_presunto_before_publication,
             self._decoy_same_bank_different_account,
             self._decoy_refund_two_cycle,
@@ -1219,10 +1249,18 @@ class _EstateBuilder:
             self._decoy_efos_vendor_without_activity,
             self._decoy_individually_approved_cluster,
         )
+        recorded: set[str] = set()
         for index in range(self.spec.n_decoys):
-            self.decoys.append(builders[index % len(builders)]())
+            for entry in builders[index % len(builders)]():
+                # Scenarios recur when n_decoys exceeds their number. The
+                # cancelled-and-reissued scenario always clears the company
+                # RFC, so a repeat would record the same entity twice.
+                if entry["entity"] in recorded:
+                    continue
+                recorded.add(entry["entity"])
+                self.decoys.append(entry)
 
-    def _decoy_efos_presunto_before_publication(self) -> dict[str, Any]:
+    def _decoy_efos_presunto_before_publication(self) -> list[dict[str, Any]]:
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=900),
             category="Logistica",
@@ -1254,20 +1292,22 @@ class _EstateBuilder:
             publication_date=publication_date,
         )
 
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "vendor_efos_record_match",
-            "why_innocent": (
-                f"Contract {contract['contract_id']} and both invoices are "
-                f"dated before the EFOS publication date "
-                f"{publication_date.isoformat()}, and no invoice or transfer "
-                "for this vendor after that date was found in the supplied "
-                "estate."
-            ),
-            "invoices": [invoice["uuid"] for invoice in invoices],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": "vendor_efos_record_match",
+                "why_innocent": (
+                    f"Contract {contract['contract_id']} and both invoices are "
+                    f"dated before the EFOS publication date "
+                    f"{publication_date.isoformat()}, and no invoice or "
+                    "transfer for this vendor after that date was found in the "
+                    "supplied estate."
+                ),
+                "invoices": [invoice["uuid"] for invoice in invoices],
+            }
+        ]
 
-    def _decoy_same_bank_different_account(self) -> dict[str, Any]:
+    def _decoy_same_bank_different_account(self) -> list[dict[str, Any]]:
         employee = self._employee_at(3)
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=700),
@@ -1293,19 +1333,22 @@ class _EstateBuilder:
             for offset in (55, 140)
         ]
 
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "vendor_employee_shared_bank_prefix",
-            "why_innocent": (
-                f"The vendor and employee {employee['emp_id']} only share the "
-                "three-digit bank code; their full 18-digit CLABEs are "
-                "different accounts, and no transfer between them was found "
-                "in the supplied estate."
-            ),
-            "invoices": [invoice["uuid"] for invoice in invoices],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": NO_DETECTOR_SHARED_BANK_PREFIX,
+                "negative_control": True,
+                "why_innocent": (
+                    f"The vendor and employee {employee['emp_id']} only share "
+                    "the three-digit bank code; their full 18-digit CLABEs are "
+                    "different accounts, and no transfer between them was "
+                    "found in the supplied estate."
+                ),
+                "invoices": [invoice["uuid"] for invoice in invoices],
+            }
+        ]
 
-    def _decoy_refund_two_cycle(self) -> dict[str, Any]:
+    def _decoy_refund_two_cycle(self) -> list[dict[str, Any]]:
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=500),
             category="Insumos",
@@ -1345,19 +1388,21 @@ class _EstateBuilder:
             reference=f"Devolucion de sobrepago factura {invoice['uuid']}",
         )
 
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "directed_bank_transfer_cycle",
-            "why_innocent": (
-                f"Transfer {refund['txn_id']} returns to the company the exact "
-                f"overpayment sent in {extra['txn_id']}, which exceeded "
-                f"purchase order {purchase_order['po_id']} and invoice "
-                f"{invoice['uuid']}."
-            ),
-            "invoices": [invoice["uuid"]],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": "directed_bank_transfer_cycle",
+                "why_innocent": (
+                    f"Transfer {refund['txn_id']} returns to the company the "
+                    f"exact overpayment sent in {extra['txn_id']}, which "
+                    f"exceeded purchase order {purchase_order['po_id']} and "
+                    f"invoice {invoice['uuid']}."
+                ),
+                "invoices": [invoice["uuid"]],
+            }
+        ]
 
-    def _decoy_framework_contract_cluster(self) -> dict[str, Any]:
+    def _decoy_framework_contract_cluster(self) -> list[dict[str, Any]]:
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=1100),
             category="Limpieza",
@@ -1386,19 +1431,21 @@ class _EstateBuilder:
             for site, offset in ((1, 0), (2, 1), (3, 2), (4, 4))
         ]
 
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "short_window_similar_invoice_cluster",
-            "why_innocent": (
-                f"Contract {contract['contract_id']} fixes one identical "
-                "monthly fee per site, so the four same-week invoices are the "
-                "contracted fee for the four sites rather than a split "
-                "purchase."
-            ),
-            "invoices": [invoice["uuid"] for invoice in invoices],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": "short_window_similar_invoice_cluster",
+                "why_innocent": (
+                    f"Contract {contract['contract_id']} fixes one identical "
+                    "monthly fee per site, so the four same-week invoices are "
+                    "the contracted fee for the four sites rather than a split "
+                    "purchase."
+                ),
+                "invoices": [invoice["uuid"] for invoice in invoices],
+            }
+        ]
 
-    def _decoy_cancelled_and_reissued(self) -> dict[str, Any]:
+    def _decoy_cancelled_and_reissued(self) -> list[dict[str, Any]]:
         customer_rfc = self._new_rfc()
         customer_clabe = self._new_clabe()
         approver = self._employee_at(0)
@@ -1437,20 +1484,23 @@ class _EstateBuilder:
             reference=f"Cobro factura {reissued['uuid']}",
         )
 
-        return {
-            "entity": f"RFC:{COMPANY_RFC}",
-            "signal": "period_end_cancelled_revenue_invoice",
-            "why_innocent": (
-                f"Invoice {cancelled['uuid']} was cancelled and reissued the "
-                f"next day as {reissued['uuid']} for the same total, the "
-                "ledger reverses the cancelled entry, and receipt "
-                f"{receipt['txn_id']} shows the reissued invoice was "
-                "collected."
-            ),
-            "invoices": [cancelled["uuid"], reissued["uuid"]],
-        }
+        return [
+            {
+                "entity": f"RFC:{COMPANY_RFC}",
+                "signal": NO_DETECTOR_PERIOD_END_CANCELLATION,
+                "negative_control": True,
+                "why_innocent": (
+                    f"Invoice {cancelled['uuid']} was cancelled and reissued "
+                    f"the next day as {reissued['uuid']} for the same total, "
+                    "the ledger reverses the cancelled entry, and receipt "
+                    f"{receipt['txn_id']} shows the reissued invoice was "
+                    "collected."
+                ),
+                "invoices": [cancelled["uuid"], reissued["uuid"]],
+            }
+        ]
 
-    def _decoy_group_shared_treasury_account(self) -> dict[str, Any]:
+    def _decoy_group_shared_treasury_account(self) -> list[dict[str, Any]]:
         shared_clabe = self._new_clabe()
         parent = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=1500),
@@ -1495,19 +1545,36 @@ class _EstateBuilder:
             for vendor, offset in ((parent, 65), (subsidiary, 150))
         ]
 
-        return {
-            "entity": f"RFC:{parent['rfc']}",
-            "signal": "shared_vendor_clabe",
-            "why_innocent": (
-                f"Contracts {parent_contract['contract_id']} and "
-                f"{subsidiary_contract['contract_id']} state that this vendor "
-                f"and {subsidiary['rfc']} belong to one group that collects "
-                "through a single centralised treasury account."
-            ),
-            "invoices": [invoice["uuid"] for invoice in invoices],
-        }
+        # detect_shared_vendor_clabe flags *both* RFCs on the shared CLABE, so
+        # both need their own entry or the unlisted one reads as an unexplained
+        # false positive.
+        return [
+            {
+                "entity": f"RFC:{parent['rfc']}",
+                "signal": "shared_vendor_clabe",
+                "why_innocent": (
+                    f"Contracts {parent_contract['contract_id']} and "
+                    f"{subsidiary_contract['contract_id']} state that this "
+                    f"vendor and {subsidiary['rfc']} belong to one group that "
+                    "collects through a single centralised treasury account."
+                ),
+                "invoices": [invoices[0]["uuid"]],
+            },
+            {
+                "entity": f"RFC:{subsidiary['rfc']}",
+                "signal": "shared_vendor_clabe",
+                "why_innocent": (
+                    f"Contract {subsidiary_contract['contract_id']} states "
+                    "that this vendor collects through the centralised "
+                    f"treasury account of the group led by {parent['rfc']}, "
+                    "and no transfer between the two vendors was found in the "
+                    "supplied estate."
+                ),
+                "invoices": [invoices[1]["uuid"]],
+            },
+        ]
 
-    def _decoy_employee_expense_reimbursement(self) -> dict[str, Any]:
+    def _decoy_employee_expense_reimbursement(self) -> list[dict[str, Any]]:
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=650),
             category="Capacitacion",
@@ -1544,19 +1611,21 @@ class _EstateBuilder:
             reference=f"Reembolso anticipo {purchase_order['po_id']}",
         )
 
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "vendor_to_employee_bank_transfer",
-            "why_innocent": (
-                f"Purchase order {purchase_order['po_id']} records that "
-                f"employee {employee['emp_id']} paid the advance personally, "
-                f"and transfer {reimbursement['txn_id']} returns exactly that "
-                "advance to them."
-            ),
-            "invoices": [invoice["uuid"]],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": "vendor_to_employee_bank_transfer",
+                "why_innocent": (
+                    f"Purchase order {purchase_order['po_id']} records that "
+                    f"employee {employee['emp_id']} paid the advance "
+                    f"personally, and transfer {reimbursement['txn_id']} "
+                    "returns exactly that advance to them."
+                ),
+                "invoices": [invoice["uuid"]],
+            }
+        ]
 
-    def _decoy_volume_rebate_cycle(self) -> dict[str, Any]:
+    def _decoy_volume_rebate_cycle(self) -> list[dict[str, Any]]:
         distributor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=1300),
             category="Insumos",
@@ -1601,19 +1670,36 @@ class _EstateBuilder:
             reference=f"Bonificacion por volumen clausula 9 {contract['contract_id']}",
         )
 
-        return {
-            "entity": f"RFC:{distributor['rfc']}",
-            "signal": "directed_bank_transfer_cycle",
-            "why_innocent": (
-                f"Clause 9 of contract {contract['contract_id']} provides the "
-                f"4% volume rebate paid back in {rebate['txn_id']}, and "
-                f"{freight['txn_id']} is the subcontracted freight the same "
-                "contract names."
-            ),
-            "invoices": [invoice["uuid"]],
-        }
+        # The cycle runs company -> distributor -> subcontractor -> company, so
+        # the cycle detector reaches the subcontractor too; it needs its own
+        # entry even though it issued no invoice.
+        return [
+            {
+                "entity": f"RFC:{distributor['rfc']}",
+                "signal": "directed_bank_transfer_cycle",
+                "why_innocent": (
+                    f"Clause 9 of contract {contract['contract_id']} provides "
+                    f"the 4% volume rebate paid back in {rebate['txn_id']}, and "
+                    f"{freight['txn_id']} is the subcontracted freight the same "
+                    "contract names."
+                ),
+                "invoices": [invoice["uuid"]],
+            },
+            {
+                "entity": f"RFC:{subcontractor['rfc']}",
+                "signal": "directed_bank_transfer_cycle",
+                "why_innocent": (
+                    f"Clause 9 of contract {contract['contract_id']} names this "
+                    f"vendor as the subcontracted carrier paid in "
+                    f"{freight['txn_id']} and provides the rebate it forwards "
+                    f"in {rebate['txn_id']}; no invoice from this vendor to the "
+                    "company was found in the supplied estate."
+                ),
+                "invoices": [],
+            },
+        ]
 
-    def _decoy_efos_vendor_without_activity(self) -> dict[str, Any]:
+    def _decoy_efos_vendor_without_activity(self) -> list[dict[str, Any]]:
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=1600),
             category="Seguridad",
@@ -1625,18 +1711,20 @@ class _EstateBuilder:
             publication_date=PERIOD_START + timedelta(days=150),
         )
 
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "vendor_efos_record_match",
-            "why_innocent": (
-                "No invoice, purchase order, contract or bank transfer for "
-                "this vendor was found in the supplied estate, so the estate "
-                "records no exposure to it."
-            ),
-            "invoices": [],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": "vendor_efos_record_match",
+                "why_innocent": (
+                    "No invoice, purchase order, contract or bank transfer for "
+                    "this vendor was found in the supplied estate, so the "
+                    "estate records no exposure to it."
+                ),
+                "invoices": [],
+            }
+        ]
 
-    def _decoy_individually_approved_cluster(self) -> dict[str, Any]:
+    def _decoy_individually_approved_cluster(self) -> list[dict[str, Any]]:
         vendor = self._new_vendor(
             registered_date=PERIOD_START - timedelta(days=950),
             category="Ingenieria",
@@ -1678,17 +1766,19 @@ class _EstateBuilder:
         po_ids = ", ".join(
             purchase_order["po_id"] for purchase_order in purchase_orders
         )
-        return {
-            "entity": f"RFC:{vendor['rfc']}",
-            "signal": "short_window_similar_invoice_cluster",
-            "why_innocent": (
-                f"Purchase orders {po_ids} cover three distinct scopes and each "
-                "one already exceeds the internal approval limit of MXN "
-                f"{INTERNAL_APPROVAL_THRESHOLD_MXN:,.2f}, so splitting them "
-                "would not have avoided any approval."
-            ),
-            "invoices": [invoice["uuid"] for invoice in invoices],
-        }
+        return [
+            {
+                "entity": f"RFC:{vendor['rfc']}",
+                "signal": "short_window_similar_invoice_cluster",
+                "why_innocent": (
+                    f"Purchase orders {po_ids} cover three distinct scopes and "
+                    "each one already exceeds the internal approval limit of "
+                    f"MXN {INTERNAL_APPROVAL_THRESHOLD_MXN:,.2f}, so splitting "
+                    "them would not have avoided any approval."
+                ),
+                "invoices": [invoice["uuid"] for invoice in invoices],
+            }
+        ]
 
     # ------------------------------------------------------------------
     # output
