@@ -32,6 +32,10 @@ from src.core.models import (
     ProposedAction,
     SchemeType,
 )
+from src.agents.case_analysis import (
+    build_case_briefing,
+    collect_declared_alternatives,
+)
 from src.investigation.investigator import LLMClient
 from src.llm.json_text import strip_code_fences
 
@@ -295,7 +299,74 @@ Instead explain:
 - why it could change the interpretation,
 - which available action can resolve it.
 
-13. RETURN ONLY VALID JSON.
+13. START FROM THE ALTERNATIVES THE DETECTORS ALREADY DECLARED.
+
+You are given `legitimate_alternatives_declared_by_detectors`. Whoever built each
+detector wrote down, in advance, the innocent explanations that produce the same
+signal, the limits of what the signal shows, and the checks that would settle it.
+
+That is your starting point, not an afterthought. Work through those first, and only
+then look for an alternative nobody anticipated. An alternative the detector itself
+warned about and that nobody checked is the strongest objection available to you.
+
+14. DEMAND DISCRIMINATING EVIDENCE, NOT MORE EVIDENCE.
+
+Before proposing any action, ask: "will the two candidate explanations predict
+DIFFERENT results for this action?"
+
+If both the fraud explanation and the innocent explanation predict the same result,
+the action is worthless no matter how much data it returns. Say what result would
+point which way. An action whose outcome cannot change your mind must not be proposed.
+
+15. NAME THE TUNNEL VISION.
+
+Check whether the investigation only ever looked for confirmation:
+
+- Were any actions taken that could have WEAKENED the hypothesis, or only ones that
+  could strengthen it?
+- Did the hypothesis change at all as evidence arrived, or was the conclusion fixed
+  from the first observation?
+- Is the subject being investigated because the evidence points there, or because it
+  was the first entity a detector surfaced?
+
+If every action taken could only confirm, say so explicitly -- that is a finding
+about the investigation, not about the subject.
+
+16. KEEP THE FOUR LEVELS SEPARATE.
+
+- ANOMALY: a pattern that differs from its peers. Not yet a reason to suspect anyone.
+- SUSPICION: a reason to look, not a claim about what happened.
+- HYPOTHESIS: a specific mechanism proposed, still to be tested.
+- VERIFIED FACT: a record in the supplied estate, or arithmetic over those records.
+
+Most bad reasoning in this system is a silent promotion between two of these levels.
+When you object, name which level the claim actually sits at and which level it is
+being treated as.
+
+17. DO NOT BLOCK A SOUND HYPOTHESIS WITH A REMOTE POSSIBILITY.
+
+You are not here to make accusations impossible. A conceivable-but-unsupported story
+is not a legitimate alternative -- a legitimate alternative is one the AVAILABLE
+EVIDENCE materially supports.
+
+If the evidence is documented, independent, and the obvious innocent explanations have
+been checked and failed, return "survives". Inventing a remote possibility to avoid
+committing is as much a failure as waving through a weak hypothesis. Both put the
+wrong case in front of a judge.
+
+Use "survives" when no material unresolved objection remains. Use
+"needs_more_evidence" only when a SPECIFIC available action could resolve a SPECIFIC
+material uncertainty. Use "legitimate_alternative" only when the available evidence
+materially supports the innocent explanation -- not merely when you can imagine one.
+
+18. IN reasoning_summary, SHOW WHAT YOU TRIED.
+
+Even when the hypothesis survives, state the strongest legitimate alternative you
+considered and why the available evidence does not support it. A hypothesis nobody
+tried to break is weaker than one that was attacked and held, and the case file has
+to show the attack. Write it so a non-technical reader can follow it.
+
+19. RETURN ONLY VALID JSON.
 
 Your output must conform exactly to the supplied ChallengerReview schema.
 Do not place prose outside the JSON.
@@ -378,10 +449,18 @@ def build_challenger_prompt(
         for action in available_actions
     ]
 
+    # El orden importa: lo que el Challenger debe leer primero va primero.
+    # Las alternativas que los detectores ya declararon son el punto de partida
+    # de su trabajo y antes quedaban enterradas dentro del volcado del CaseState.
+    # Ver src/agents/case_analysis.py.
     user_payload = {
         "target_hypothesis": target_hypothesis.model_dump(mode="json"),
-        "case_state": case_state.model_dump(mode="json"),
+        "legitimate_alternatives_declared_by_detectors": collect_declared_alternatives(
+            case_state
+        ),
+        "deterministic_pre_analysis": build_case_briefing(case_state),
         "available_actions": action_context,
+        "case_state": case_state.model_dump(mode="json"),
         "required_output_schema": schema,
     }
 

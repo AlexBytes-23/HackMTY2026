@@ -8,6 +8,7 @@ from src.core.models import (
     CaseState,
     ProposedAction,
 )
+from src.agents.case_analysis import build_case_briefing
 from src.investigation.investigator import LLMClient
 from src.llm.json_text import strip_code_fences
 
@@ -140,10 +141,83 @@ You must NEVER decide guilt, fraud, confidence level, probable/proven, or Findin
 10. If you object, identify EXACTLY how the objection could change the conclusion.
 11. Propose a real action ONLY when it can materially resolve the weakness. Do not propose actions that do not exist in the available actions list.
 
-=== EXPECTED OUTCOME ===
-- "clear": No material methodological objection remains using the available case state, tools, and supplied rule context. (Does NOT mean hypothesis is correct/proven. You must NOT include material objections).
-- "needs_more_work": A material methodological weakness exists and at least one concrete available action can reasonably address it. (MUST propose at least one action).
-- "cannot_support": The current hypothesis cannot be methodologically supported from the available estate/tools because a material defect cannot reasonably be repaired with another available action. (MUST provide a material blocker).
+=== THE ONE FAILURE MODE THAT KEEPS RECURRING ===
+
+A check that establishes something about ONE record, used to make a claim about ALL
+of them. This has re-entered this system three separate times through different doors.
+
+For every claim in the hypothesis, ask explicitly: is this UNIVERSAL over the cited
+records, or EXISTENTIAL over them? "An invoice was issued after the listing" and
+"every invoice was issued after the listing" are different claims resting on
+different evidence. If the method establishes the existential and the hypothesis
+asserts the universal, that is a material methodological defect -- say so, and say
+which records would have to be checked to close the gap.
+
+=== USE THE DETERMINISTIC PRE-ANALYSIS ===
+
+You are given a `deterministic_pre_analysis` block computed in Python from the case
+state. Its numbers are established facts; do not recompute or dispute them. Use them
+instead of eyeballing the raw case state:
+
+* `evidence_independence.distinct_underlying_records` is how many separate facts
+  actually exist. `evidence_item_count` is NOT corroboration. If five evidence items
+  rest on two records, the case has two facts, not five.
+* `evidence_independence.records_supporting_more_than_one_signal` names each record
+  that more than one detector or evidence item is built on. Those signals are NOT
+  independent of one another. Multiple detectors agreeing is not agreement; it is the
+  same record counted twice.
+* `absence_claims.successful_queries_returning_no_record` lists queries that ran
+  correctly and found nothing. If the hypothesis leans on any of these as if it
+  established non-existence, that is a material defect.
+* `cycle_continuity` gives the amount spread and date span of each detected cycle.
+  A cycle with legs differing many-fold, or separated by months, is weak support for
+  a same-money interpretation. No threshold is supplied and you must not invent one:
+  reason from the numbers shown.
+* `shared_identifier_claims` states whether a transfer between the parties is also
+  observed. A shared identifier WITHOUT an observed flow supports a much narrower
+  claim than one with it.
+* `scores` lists every score and whether its semantics were declared. A score with
+  `semantics_declared: false` cannot be interpreted at all and must not support a
+  conclusion.
+
+=== HOW TO DECIDE ===
+
+Ask, in this order:
+
+1. Does any claim rest on a record that another claim already rests on, while being
+   presented as independent support?
+2. Does any claim treat a query that returned nothing as proof that nothing exists?
+3. Does any claim treat a matching identifier as ownership, control or collusion?
+4. Does any claim treat a cycle as the same money, or a correlation as a cause?
+5. Does any claim read a score as a likelihood?
+6. Is any claim universal where the method only established an existential?
+7. Is a rule, threshold or legal requirement being used that was NOT supplied in
+   `rule_context`?
+
+Then choose:
+
+- "clear": you worked through 1-7 and none applies with material force. This does NOT
+  mean the hypothesis is correct or proven -- only that you found no methodological
+  defect that would change the conclusion. You must NOT include material objections.
+  Put genuinely minor observations in `non_material_notes`.
+- "needs_more_work": a material defect exists AND at least one action in the available
+  list could materially resolve it. MUST propose at least one such action. Prefer the
+  action whose result could FALSIFY the hypothesis, not merely add to it.
+- "cannot_support": a material defect exists and NO available action can repair it --
+  for example the estate cannot answer the question at all. MUST give a material
+  blocker saying precisely why it is unrepairable. Do not use this outcome for a defect
+  that a listed action could fix; that is "needs_more_work".
+
+Be skeptical and useful, not obstructive. A clean method deserves "clear". Do not
+manufacture a defect to appear rigorous, and do not block a sound method over a
+remote possibility. Equally, do not wave through a conclusion that is stronger than
+its evidence.
+
+=== reasoning_summary ===
+
+Write it so a non-technical reader can follow it. State, in plain language: what the
+method actually established, what it did not, and -- if you objected -- exactly how
+your objection could change the conclusion. Do not restate the hypothesis back.
 
 Do NOT duplicate the Challenger (e.g. do not invent legitimate alternative business stories).
 Do NOT duplicate the Verifier (do not recalculate final monetary facts).
@@ -181,12 +255,16 @@ def build_method_critic_prompt(
     else:
         rule_context_str = _safe_serialize(rule_context)
     
+    # El pre-analisis va ANTES del volcado del case_state a proposito: es lo que
+    # el critico debe leer primero, y lo que evita que tenga que inferir a ojo
+    # cosas que Python ya calculo. Ver src/agents/case_analysis.py.
     context = {
         "target_hypothesis_id": target_hypothesis_id,
-        "case_state": case_state.model_dump(),
+        "deterministic_pre_analysis": build_case_briefing(case_state),
         "deterministic_dependency_analysis": dependencies,
-        "available_actions": safe_actions,
         "rule_context": rule_context_str,
+        "available_actions": safe_actions,
+        "case_state": case_state.model_dump(),
         "schema": MethodCriticReview.model_json_schema()
     }
     
