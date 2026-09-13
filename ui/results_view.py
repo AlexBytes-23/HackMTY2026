@@ -20,10 +20,12 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import webbrowser
 from pathlib import Path
 
 import customtkinter as ctk
 
+from ui import case_file
 from ui import theme as T
 from ui.audit_bridge import AuditResult
 
@@ -186,18 +188,53 @@ def render(parent, result: AuditResult) -> ctk.CTkScrollableFrame:
 
     # ---- output -----------------------------------------------------------
     if result.submission_path:
-        _section(view, "Output",
-                 "The machine-readable submission for this run.")
+        _section(view, "Export",
+                 "The case file is the document a judge reads. The submission "
+                 "is the machine-readable form the validator checks.")
         out = ctk.CTkFrame(view, fg_color=T.CARD_COLOR, corner_radius=10,
                            border_width=1, border_color=T.BORDER_COLOR)
-        out.pack(fill="x", pady=(0, 18))
-        ctk.CTkLabel(out, text=result.submission_path, anchor="w",
-                     font=ctk.CTkFont(size=10), text_color=T.TEXT_SECONDARY,
-                     wraplength=560).pack(side="left", padx=16, pady=14)
-        ctk.CTkButton(out, text="Open folder", width=120, height=32,
+        out.pack(fill="x", pady=(0, 8))
+
+        status = ctk.CTkLabel(
+            out, text=result.submission_path, anchor="w",
+            font=ctk.CTkFont(size=10), text_color=T.TEXT_SECONDARY,
+            wraplength=440)
+        status.pack(side="left", padx=16, pady=14)
+
+        def export_case_file():
+            """Write the self-contained HTML case file and open it."""
+            try:
+                target = Path(result.submission_path).parent / "case_file.html"
+                case_file.export(result, target)
+            except Exception as error:  # noqa: BLE001 - surfaced to the user
+                status.configure(text="Case file could not be written: %s"
+                                      % error, text_color=T.ERROR)
+                return
+            status.configure(text="Case file written: %s" % target,
+                             text_color=T.SUCCESS)
+            try:
+                webbrowser.open(target.resolve().as_uri())
+            except Exception:
+                _reveal(str(target))
+
+        ctk.CTkButton(out, text="Open folder", width=110, height=32,
+                      corner_radius=7, fg_color="transparent", border_width=1,
+                      border_color=T.BORDER_COLOR, hover_color=T.CARD_LIGHT,
+                      text_color=T.TEXT_SECONDARY,
+                      font=ctk.CTkFont(size=11),
+                      command=lambda: _reveal(result.submission_path)
+                      ).pack(side="right", padx=(6, 16), pady=14)
+        ctk.CTkButton(out, text="Export case file", width=150, height=32,
                       corner_radius=7, fg_color=T.BLUE, hover_color=T.BLUE_HOVER,
                       font=ctk.CTkFont(size=11, weight="bold"),
-                      command=lambda: _reveal(result.submission_path)
-                      ).pack(side="right", padx=16, pady=14)
+                      command=export_case_file).pack(side="right", pady=14)
+
+        ctk.CTkLabel(view,
+                     text="The case file is a single self-contained HTML file: "
+                          "no external stylesheet, script or font. It renders "
+                          "with the network disabled and prints to PDF.",
+                     font=ctk.CTkFont(size=10), text_color=T.TEXT_MUTED,
+                     justify="left", wraplength=760).pack(anchor="w",
+                                                          pady=(0, 18))
 
     return view

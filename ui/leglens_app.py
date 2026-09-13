@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ui import auth, results_view
+from ui import auth, case_file, results_view
 from ui.audit_bridge import EstateFormatError, run_audit
 from ui.theme import (BG_COLOR, BLUE, BLUE_HOVER, BORDER_COLOR, CARD_COLOR,
                       CARD_LIGHT, ERROR, SUCCESS, TEXT_MUTED, TEXT_PRIMARY,
@@ -425,18 +425,32 @@ def register_user():
 # Workspace
 def initial_page():
 
-    root.withdraw()
-
     initialpage = ctk.CTkToplevel(root)
     initialpage.title("LedgerLens | Forensic Auditor")
-    initialpage.geometry("1100x700")
     initialpage.minsize(950, 600)
     initialpage.configure(fg_color=BG_COLOR)
 
-    center_window(initialpage, 1100, 700)
+    # Open the workspace centred on wherever the login window actually is,
+    # rather than on the screen centre. Without this the window appears to jump
+    # across the display at the moment of login.
+    root.update_idletasks()
+    cx = root.winfo_x() + root.winfo_width() // 2
+    cy = root.winfo_y() + root.winfo_height() // 2
+    initialpage.geometry("1100x700+%d+%d" % (max(cx - 550, 0), max(cy - 350, 0)))
 
-    initialpage.focus()
-    initialpage.grab_set()
+    # Hide the login window only once the workspace has actually been mapped.
+    # Withdrawing first leaves a gap with no window on screen, which reads as a
+    # flicker or as the app having closed.
+    initialpage.update_idletasks()
+    initialpage.deiconify()
+    root.withdraw()
+    initialpage.lift()
+    initialpage.focus_force()
+
+    # Deliberately NO grab_set() here. The workspace is the main window, not a
+    # modal dialog; an event grab on it makes the file picker and the message
+    # boxes fight for focus, which is what made the window appear to change on
+    # login. The registration dialog keeps its grab, because that one IS modal.
 
     # Sidebar
     sidebar = ctk.CTkFrame(
@@ -615,6 +629,10 @@ def initial_page():
 
         initialpage.destroy()
         root.deiconify()
+        root.lift()
+        root.focus_force()
+        entry_password.delete(0, "end")
+        clear_error()
 
     btn_logout = ctk.CTkButton(
         sidebar_bottom,
@@ -1002,6 +1020,10 @@ def initial_page():
 
         initialpage.destroy()
         root.deiconify()
+        root.lift()
+        root.focus_force()
+        entry_password.delete(0, "end")
+        clear_error()
 
     initialpage.protocol(
         "WM_DELETE_WINDOW",

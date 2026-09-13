@@ -250,3 +250,90 @@ def test_the_app_does_not_reference_the_plaintext_credential_file():
     body = body.split('"""', 2)[-1]  # drop the module docstring
     assert "UsernamePassword" not in body
     assert "read_excel" not in body
+
+
+# ------------------------------------------------------------- case file ---
+
+@needs_estate
+def test_case_file_has_every_required_section_in_order(tmp_path):
+    """official_materials/.../case_file_structure.md lists five sections and
+    requires them in this order. A judge reads this document."""
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    html = case_file.render_html(result)
+
+    order = ["Case file", "Executive summary", "Findings",
+             "Leads not pursued", "Method and limits"]
+    positions = [html.find(section) for section in order]
+    assert all(p >= 0 for p in positions), dict(zip(order, positions))
+    assert positions == sorted(positions), "sections are out of order"
+
+
+@needs_estate
+def test_case_file_header_carries_the_three_cost_numbers(tmp_path):
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    html = case_file.render_html(result)
+    for token in ("Estate seed", "Model calls", "Cost", "Wall clock",
+                  "Deterministic"):
+        assert token in html, token
+
+
+@needs_estate
+def test_money_trail_is_a_rendered_diagram_not_prose(tmp_path):
+    """Prose-only caps Clarity at 3, so this is worth a test of its own."""
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    if not result.findings:
+        pytest.skip("no finding in this run to draw a trail for")
+    html = case_file.render_html(result)
+    assert "<svg" in html
+    assert "Money trail" in html
+
+
+@needs_estate
+def test_case_file_fetches_nothing_so_it_renders_offline(tmp_path):
+    """Judges may ask us to open it with connectivity disabled."""
+    import re
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    html = case_file.render_html(result)
+    refs = re.findall(r'(?:src|href)\s*=\s*["\'](?!#)([^"\']+)', html)
+    assert refs == [], refs
+    # The SVG namespace URI is a declaration, not a fetch: opening the file
+    # requests nothing from w3.org. Any OTHER absolute URL would be a request.
+    fetched = [u for u in re.findall(r'https?://[^\s"\'<>]+', html)
+               if not u.startswith("http://www.w3.org/")]
+    assert fetched == [], fetched
+
+
+@needs_estate
+def test_case_file_states_what_the_system_cannot_do(tmp_path):
+    """Stating limits plainly scores better than implying completeness."""
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    html = case_file.render_html(result)
+    assert "cannot detect" in html
+    assert "no record was found in the supplied estate" in html.lower()
+    assert "phantom_vendor" in html
+
+
+@needs_estate
+def test_case_file_lists_every_closed_lead_with_its_reason(tmp_path):
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    html = case_file.render_html(result)
+    for lead in result.leads[:6]:
+        assert lead.entity in html, lead.entity
+    assert "Tools called" in html and "Closed by" in html
+
+
+@needs_estate
+def test_case_file_export_writes_a_readable_file(tmp_path):
+    from ui import case_file
+    result = run_audit(ESTATE_DB, out_dir=tmp_path)
+    out = case_file.export(result, tmp_path / "case_file.html")
+    assert out.exists()
+    text = out.read_text(encoding="utf-8")
+    assert text.startswith("<!doctype html>")
+    assert len(text) > 3000
