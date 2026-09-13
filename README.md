@@ -132,7 +132,7 @@ python official_materials/student-materials/forensic-auditor/validate_format.py 
 ## Qué está verificado
 
 ```
-456 tests pasando, 3 saltados (los de GNN, sin torch instalado)
+551 tests pasando, 3 saltados (los de GNN, sin torch instalado)
 ```
 
 - El camino completo `estate.db -> submission.json` pasa el **validador oficial**,
@@ -151,8 +151,8 @@ Decirlo abiertamente puntúa mejor que insinuar una cobertura que no se puede de
 | Esquema | Estado |
 |---|---|
 | `phantom_vendor` | **Verificador sustantivo completo.** Exige listado `definitivo` y facturas emitidas en o después de la publicación |
-| `kickback` | Se detecta y levanta lead. **Sin verificador** ⇒ no se convierte en hallazgo |
-| `threshold_splitting` | Se detecta y levanta lead. **Sin verificador** |
+| `kickback` | **Verificador sustantivo completo.** Exige transferencia entre cuentas *distintas* del proveedor al empleado **y** que ese empleado apruebe una orden de compra citada de ese proveedor |
+| `threshold_splitting` | Se detecta y levanta lead. **Sin verificador** ⇒ no se convierte en hallazgo |
 | `round_tripping` | Se detecta el ciclo. **Verificador deliberadamente descartado** — ver abajo |
 | `revenue_inflation` | Señalado. **Sin verificador** |
 
@@ -168,6 +168,21 @@ verificador acusaría al señuelo. Preferimos dejarlo como lead.
 específico por esquema, así que el techo de confianza es `probable`.
 
 ---
+
+### Los dos señuelos que el verificador de kickback resiste
+
+Medido sobre la estate adversarial. Cada señuelo cae por una condición **distinta**, lo
+que significa que las dos condiciones cargan peso y ninguna es redundante:
+
+| Señuelo | Por qué no se acusa |
+|---|---|
+| El proveedor **es** el empleado — persona física con actividad empresarial, comparte los 18 dígitos del CLABE, con contrato y órdenes de compra | *"A shared account is consistent with the vendor and the employee being the same person."* Falla la primera condición: no hay transferencia entre cuentas distintas |
+| Reembolso de gastos documentado del proveedor al empleado | *"Without the approval link the transfer is consistent with an ordinary documented payment."* Falla la segunda: ese empleado no aprueba sus órdenes de compra |
+
+Ese texto sale del verificador, no de una narrativa — es citable tal cual en el case file.
+
+El esquema real sí se autoriza, por **MXN 534,238.00**, que coincide exactamente con el
+answer key.
 
 ## Las reglas que no se rompen
 
@@ -200,20 +215,22 @@ src/            el auditor. Nunca importa dev/ ni eval/
   agents/       Challenger, Method Critic
   verifier/     OfficialVerifier
   gates/        EvidenceGate
-  rules/        RuleRegistry (CFF Art. 69-B)
+  rules/        RuleRegistry (CFF Art. 69-B; segregacion de funciones)
   output/       FindingBuilder, SubmissionBuilder
   run_audit.py  CLI end-to-end
 dev/            generador de estates + answer key   (fuera del alcance del agente)
 dev_eval/       estate adversarial held-out + probe (fuera del alcance del agente)
 ui/             interfaz de escritorio
-tests/          456 pruebas pasando, 3 saltadas
+tests/          551 pruebas pasando, 3 saltadas
 ```
 
 ---
 
 ## Limitaciones honestas
 
-- Un solo esquema tiene verificador sustantivo, así que el recall está acotado por diseño.
+- Dos de los cinco esquemas tienen verificador sustantivo, así que el recall está acotado
+  por diseño. Medido sobre la estate adversarial held-out: **2 de 5 esquemas encontrados,
+  cero señuelos acusados** de 18 plantados.
   Preferimos pocos hallazgos defendibles a muchos indefendibles.
 - La ausencia de un registro en el estate nunca se reporta como ausencia en la realidad.
 - Múltiples detectores sobre los mismos registros **no** son corroboración independiente,
