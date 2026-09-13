@@ -16,6 +16,7 @@ from src.investigation.preverification_pipeline import (
     PreVerificationResult,
     run_preverification_pipeline,
 )
+from src.gnn.runtime import GNNRuntimeResult, run_optional_gnn_discovery
 
 
 CasePipelineStatus = Literal[
@@ -37,8 +38,20 @@ class CasePipelineOutcome(BaseModel):
     error_message: str | None = None
 
 
+class GNNDiscoveryMetadata(BaseModel):
+    """Operational metadata for optional neural discovery."""
+
+    enabled: bool
+    status: Literal["disabled", "skipped", "success", "error"]
+    observation_count: int = 0
+    training_seeds: list[int] = Field(default_factory=list)
+    detail: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+
 class EstatePreverificationMetadata(BaseModel):
-    """Deterministic run counters. This is not official submission metadata."""
+    """Run counters. This is not official submission metadata."""
 
     observation_count: int
     lead_count: int
@@ -48,6 +61,7 @@ class EstatePreverificationMetadata(BaseModel):
     error_count: int
     max_cases: int | None = None
     wall_clock_seconds: float = Field(ge=0)
+    gnn: GNNDiscoveryMetadata
 
 
 class EstatePreverificationRunResult(BaseModel):
@@ -72,6 +86,10 @@ def run_estate_preverification(
     max_review_rounds: int = 3,
     max_followup_investigation_steps: int = 3,
     rule_context: list | None = None,
+    enable_gnn: bool = False,
+    gnn_seeds: tuple[int, ...] = (11, 17, 23),
+    gnn_training_config: object | None = None,
+    gnn_policy: object | None = None,
 ) -> EstatePreverificationRunResult:
     """
     Run the real pipeline from an official EstateRepository to the Verifier boundary.
@@ -79,6 +97,7 @@ def run_estate_preverification(
     Flow:
         EstateRepository
         -> deterministic observations
+        -> optional GNN discovery observations
         -> Leads
         -> CaseState
         -> Investigator
@@ -100,6 +119,18 @@ def run_estate_preverification(
     # returning an apparently clean audit.
     observations = run_deterministic_tabular_detectors(estate)
     observations.extend(run_deterministic_relational_detectors(estate))
+
+    # Neural discovery is optional by design. A failure must be visible, but it
+    # must not erase deterministic observations or block the rest of the audit.
+    gnn_result = run_optional_gnn_discovery(
+        estate,
+        enabled=enable_gnn,
+        seeds=gnn_seeds,
+        training_config=gnn_training_config,
+        policy=gnn_policy,
+    )
+    observations.extend(gnn_result.observations)
+
     leads = build_leads(observations)
 
     selected_leads = leads if max_cases is None else leads[:max_cases]
@@ -168,6 +199,15 @@ def run_estate_preverification(
         error_count=error_count,
         max_cases=max_cases,
         wall_clock_seconds=perf_counter() - started,
+        gnn=GNNDiscoveryMetadata(
+            enabled=gnn_result.enabled,
+            status=gnn_result.status,
+            observation_count=len(gnn_result.observations),
+            training_seeds=list(gnn_result.seeds),
+            detail=gnn_result.detail,
+            error_type=gnn_result.error_type,
+            error_message=gnn_result.error_message,
+        ),
     )
 
     return EstatePreverificationRunResult(
