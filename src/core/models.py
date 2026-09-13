@@ -125,41 +125,77 @@ class CaseEvidence(BaseModel):
 
 class ActionRecord(BaseModel):
     """
-    Guarda qué hizo el agente y por qué.
+    Registro auditable de una acción ejecutada.
     """
 
     step: int
 
     action_name: str
 
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
     reason: str
 
+    question_resolved: str | None = None
+
     result_summary: str
+
+    result_data: Any = None
 
     success: bool = True
 
-    produced_evidence_ids: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(
+        default_factory=list
+    )
+
+    produced_evidence_ids: list[str] = Field(
+        default_factory=list
+    )
+
+    duration_ms: float | None = None
 
 
 class CaseState(BaseModel):
     """
-    La libreta completa del investigador.
+    Memoria completa y auditable de una investigación.
+
+    Conserva tanto el origen del caso como todo
+    lo que se descubre después.
     """
 
     case_id: str
     lead_id: str
 
-    subject_entities: list[str] = Field(default_factory=list)
+    # Por qué abrimos originalmente este caso.
+    lead_reason: str = ""
 
-    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    subject_entities: list[str] = Field(
+        default_factory=list
+    )
 
-    evidence: list[CaseEvidence] = Field(default_factory=list)
+    # Observaciones originales de Alex/Daniel/etc.
+    # No queremos perderlas al convertirlas en un Lead.
+    observations: list[Observation] = Field(
+        default_factory=list
+    )
 
-    unknowns: list[str] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(
+        default_factory=list
+    )
 
-    actions_taken: list[ActionRecord] = Field(default_factory=list)
+    evidence: list[CaseEvidence] = Field(
+        default_factory=list
+    )
+
+    unknowns: list[str] = Field(
+        default_factory=list
+    )
+
+    actions_taken: list[ActionRecord] = Field(
+        default_factory=list
+    )
 
     status: Literal[
         "open",
@@ -168,7 +204,6 @@ class CaseState(BaseModel):
         "ready_for_verification",
         "closed",
     ] = "open"
-
 
 class ChallengerReview(BaseModel):
     strongest_legitimate_alternative: str | None = None
@@ -210,3 +245,85 @@ class VerifiedFact(BaseModel):
     calculation: str | None = None
 
     errors: list[str] = Field(default_factory=list)
+
+# ============================================================
+# DECISIÓN DEL INVESTIGATOR
+# ============================================================
+
+class ProposedAction(BaseModel):
+    """
+    Acción concreta que el Investigator quiere ejecutar.
+
+    action_name debe corresponder a una acción existente
+    en el Action Bank.
+    """
+
+    action_name: str
+
+    arguments: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    reason: str
+
+    question_resolved: str
+
+
+class InvestigatorDecision(BaseModel):
+    """
+    Una iteración de razonamiento del Investigator.
+
+    El Investigator NO devuelve una acusación final.
+
+    Decide qué hacer a continuación.
+    """
+
+    decision: Literal[
+        "investigate",
+        "request_review",
+        "ready_for_verification",
+        "close_inconclusive",
+    ]
+
+    current_assessment: str
+
+    hypotheses: list[Hypothesis] = Field(
+        default_factory=list
+    )
+
+    next_action: ProposedAction | None = None
+
+    new_unknowns: list[str] = Field(
+        default_factory=list
+    )
+
+    resolved_unknowns: list[str] = Field(
+    default_factory=list
+    )
+
+    reason: str
+
+class InvestigationLoopResult(BaseModel):
+    """
+    Resultado completo de ejecutar varias vueltas
+    del Investigator.
+
+    No sólo devuelve el CaseState final:
+    conserva también las decisiones que llevaron hasta él.
+    """
+
+    case_state: CaseState
+
+    decisions: list[InvestigatorDecision] = Field(
+        default_factory=list
+    )
+
+    iterations: int
+
+    stop_reason: Literal[
+        "request_review",
+        "ready_for_verification",
+        "close_inconclusive",
+        "max_steps_reached",
+        "repeated_action",
+    ]
