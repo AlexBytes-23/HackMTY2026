@@ -1,0 +1,10 @@
+networkx
+pandas
+numpy<2
+matplotlib
+pydantic
+pytest
+scikit-learn
+ruff
+torch==2.2.2
+torch-geometric==2.6.1
