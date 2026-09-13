@@ -148,11 +148,14 @@ def apply_investigator_decision(
         produced_evidence_ids: list[str] = []
 
         # --------------------------------------------------------
-        # Sólo una acción ejecutada correctamente puede producir
-        # evidencia para el caso.
+        # Ejecutar una consulta correctamente NO significa que haya
+        # producido evidencia positiva del estate. Un resultado vacío
+        # sigue siendo útil y queda auditado en ActionRecord, pero no
+        # debe convertirse en CaseEvidence sin registros fuente que lo
+        # respalden.
         # --------------------------------------------------------
 
-        if result.success:
+        if result.success and result.evidence_refs:
 
             evidence_id = (
                 f"EV-ACTION-{step:04d}"
