@@ -218,3 +218,36 @@ def test_runner_returns_shared_observation_contract():
         assert observation.detector_name == "deterministic_tabular"
         assert observation.score is None
         assert observation.evidence
+
+def test_shared_clabe_does_not_double_the_employee_prefix():
+    """The official employees schema documents emp_id as 'EMP:0001'.
+
+    An estate that stores the prefix must not produce 'EMP:EMP:0001': that
+    entity matches nothing, so a correct finding would score as a missed
+    scheme and an unattributed accusation at the same time.
+    """
+
+    vendors = pd.DataFrame(
+        [{"rfc": "VEN001", "bank_clabe": "111111111111111111"}]
+    )
+    employees = pd.DataFrame(
+        [{"emp_id": "EMP:0001", "bank_clabe": "111111111111111111"}]
+    )
+
+    obs = detect_vendor_employee_shared_clabe(vendors, employees)[0]
+
+    assert "EMP:0001" in obs.entities
+    assert not any(entity.startswith("EMP:EMP:") for entity in obs.entities)
+
+
+def test_shared_clabe_still_adds_the_prefix_when_it_is_absent():
+    vendors = pd.DataFrame(
+        [{"rfc": "VEN001", "bank_clabe": "111111111111111111"}]
+    )
+    employees = pd.DataFrame(
+        [{"emp_id": "0001", "bank_clabe": "111111111111111111"}]
+    )
+
+    obs = detect_vendor_employee_shared_clabe(vendors, employees)[0]
+
+    assert "EMP:0001" in obs.entities

@@ -131,7 +131,9 @@ def run_estate_preverification(
     )
     observations.extend(gnn_result.observations)
 
-    leads = build_leads(observations)
+    # The estate is passed so a CLABE-only observation (a bank cycle) can be
+    # attributed to the account's registered owner instead of losing its subject.
+    leads = build_leads(observations, estate)
 
     selected_leads = leads if max_cases is None else leads[:max_cases]
     outcomes: list[CasePipelineOutcome] = []

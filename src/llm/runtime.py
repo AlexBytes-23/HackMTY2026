@@ -69,9 +69,13 @@ class GeminiLLMClient:
         self.base_url = base_url.rstrip("/")
         self.last_usage: dict[str, int | None] | None = None
 
-    def complete(self, system_prompt: str, user_prompt: str) -> str:
-        url = f"{self.base_url}/models/{self.model}:generateContent"
-        payload = {
+    def _build_payload(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        """Construye el cuerpo de la petición. Sin red, para poder testearlo.
+
+        ``responseMimeType`` pide JSON al proveedor. No sustituye a
+        ``strip_code_fences`` en los parsers: es una petición, no una garantía.
+        """
+        return {
             "contents": [
                 {
                     "role": "user",
@@ -81,7 +85,12 @@ class GeminiLLMClient:
             "systemInstruction": {
                 "parts": [{"text": system_prompt}],
             },
+            "generationConfig": {"responseMimeType": "application/json"},
         }
+
+    def complete(self, system_prompt: str, user_prompt: str) -> str:
+        url = f"{self.base_url}/models/{self.model}:generateContent"
+        payload = self._build_payload(system_prompt, user_prompt)
         data = json.dumps(payload).encode("utf-8")
         headers = {
             "Content-Type": "application/json",

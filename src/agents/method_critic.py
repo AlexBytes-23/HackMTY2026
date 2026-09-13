@@ -9,6 +9,7 @@ from src.core.models import (
     ProposedAction,
 )
 from src.investigation.investigator import LLMClient
+from src.llm.json_text import strip_code_fences
 
 MethodCriticOutcome = Literal["clear", "needs_more_work", "cannot_support"]
 
@@ -194,12 +195,7 @@ def build_method_critic_prompt(
 
 def parse_method_critic_review(text: str) -> MethodCriticReview:
     try:
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
-        payload = json.loads(text.strip())
+        payload = json.loads(strip_code_fences(text))
         return MethodCriticReview.model_validate(payload)
     except json.JSONDecodeError as exc:
         raise ValueError("Method Critic returned invalid JSON.") from exc

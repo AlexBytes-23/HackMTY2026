@@ -33,6 +33,7 @@ from src.core.models import (
     SchemeType,
 )
 from src.investigation.investigator import LLMClient
+from src.llm.json_text import strip_code_fences
 
 
 ChallengerOutcome = Literal[
@@ -398,18 +399,7 @@ def parse_challenger_review(raw_response: str) -> ChallengerReview:
     Parse and validate the structured Challenger response.
     """
 
-    text = raw_response.strip()
-
-    if text.startswith("```"):
-        lines = text.splitlines()
-
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-
-        text = "\n".join(lines).strip()
+    text = strip_code_fences(raw_response)
 
     try:
         payload = json.loads(text)

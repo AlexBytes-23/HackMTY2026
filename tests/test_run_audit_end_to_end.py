@@ -333,9 +333,11 @@ def test_leads_not_pursued_reasons_are_specific(estate_db, tmp_path):
         assert lead["entity"].startswith(("RFC:", "EMP:"))
         assert lead["reason"].strip()
         # A reason must name what was looked at, not merely assert a verdict.
+        # Case-insensitive: the verdict is capitalised when it follows the
+        # sentence naming the documents that were read.
         assert any(
-            marker in lead["reason"]
-            for marker in ("reviewed ", "Action Bank call", "Execution failure")
+            marker in lead["reason"].lower()
+            for marker in ("reviewed ", "action bank call", "execution failure")
         ), lead["reason"]
 
 
@@ -428,3 +430,142 @@ def test_official_entity_rejects_empty_payloads_and_unknown_prefixes():
     assert _official_entity("EMP:", estate) is None
     assert _official_entity("CLABE:", estate) is None
     assert _official_entity("just-a-name", estate) is None
+
+
+def test_official_entity_does_not_double_an_already_prefixed_id():
+    """A judge's estate may store the prefix: emp_id is documented as 'EMP:0001'.
+
+    'EMP:EMP:0001' matches no entity in the answer key, so a correct finding
+    would score as a missed scheme and an unattributed accusation at once.
+    """
+
+    estate = _ClabeEstate(
+        vendors={"111111111111111111": {"rfc": "RFC:AAA010101AA1"}},
+        employees={"222222222222222222": {"emp_id": "EMP:0001"}},
+    )
+
+    assert _official_entity("CLABE:111111111111111111", estate) == "RFC:AAA010101AA1"
+    assert _official_entity("CLABE:222222222222222222", estate) == "EMP:0001"
+
+
+# ==========================================================================
+# LEADS NOT PURSUED: THE ANSWER A JUDGE READS OFF THE PAGE
+# ==========================================================================
+
+DECLINED_RFC = "LAT010101DD4"
+
+
+@pytest.fixture
+def estate_db_with_a_declined_vendor(tmp_path):
+    """A listed vendor whose cited invoices all predate its EFOS publication.
+
+    The listing is real, but it does not reach these invoices, so the gate
+    declines and the vendor becomes a lead rather than a finding.
+    """
+
+    db_path = tmp_path / "estate_declined.db"
+    _build_estate(db_path)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO efos_list (rfc, legal_name, status, publication_date) "
+        f"VALUES ('{DECLINED_RFC}', 'Late Listing SA de CV', 'definitivo', "
+        "'2025-11-04')"
+    )
+    conn.execute(
+        "INSERT INTO vendors (rfc, legal_name, bank_clabe, category) "
+        f"VALUES ('{DECLINED_RFC}', 'Late Listing SA de CV', "
+        "'055555555555555555', 'manufactura')"
+    )
+    conn.execute(
+        "INSERT INTO contracts (contract_id, vendor_rfc, start_date, value, scope_text) "
+        f"VALUES ('CTR-2023-0001', '{DECLINED_RFC}', '2023-02-01', 900000.0, "
+        "'Manufactura de subensambles metalmecanicos.')"
+    )
+    conn.execute(
+        "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, requester, "
+        "approver, description) "
+        f"VALUES ('PO-0001', '{DECLINED_RFC}', '2025-01-10', 150000.0, 'req', "
+        "'apr', 'subensambles')"
+    )
+    conn.execute(
+        "INSERT INTO invoices (uuid, issuer_rfc, receiver_rfc, total, issue_date) "
+        f"VALUES ('INV-0700', '{DECLINED_RFC}', 'ACME010101AA1', '150000.00', "
+        "'2025-01-20')"
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _declined_lead(estate_db, tmp_path):
+    out_path = tmp_path / "declined.json"
+    _run(estate_db, out_path)
+    submission = json.loads(out_path.read_text(encoding="utf-8"))
+
+    leads = [
+        lead
+        for lead in submission["leads_not_pursued"]
+        if lead["entity"] == f"RFC:{DECLINED_RFC}"
+    ]
+    assert leads, submission["leads_not_pursued"]
+    return leads[0], submission
+
+
+def test_a_declined_lead_names_the_documents_that_were_read(
+    estate_db_with_a_declined_vendor, tmp_path
+):
+    lead, _ = _declined_lead(estate_db_with_a_declined_vendor, tmp_path)
+
+    assert lead["reason"].startswith(
+        "Read 1 invoice(s), 1 purchase order(s), 1 contract(s) for "
+        f"{DECLINED_RFC} (Late Listing SA de CV)."
+    )
+    assert (
+        "Contract CTR-2023-0001 states: Manufactura de subensambles"
+        in lead["reason"]
+    )
+
+
+def test_a_declined_lead_quotes_the_check_that_did_not_clear(
+    estate_db_with_a_declined_vendor, tmp_path
+):
+    """Naming the check is not enough; the judge needs what the records showed."""
+
+    lead, _ = _declined_lead(estate_db_with_a_declined_vendor, tmp_path)
+
+    assert "Unmet critical check(s): PHANTOM-EFOS-INVOICE-LINK" in lead["reason"]
+    # The documentary specifics the verifier computed, not a paraphrase.
+    assert "definitivo" in lead["reason"]
+    assert "2025-11-04" in lead["reason"]  # publication_date
+    assert "2025-01-20" in lead["reason"]  # the invoice that predates it
+
+
+def test_a_declined_lead_reports_the_reads_it_actually_made(
+    estate_db_with_a_declined_vendor, tmp_path
+):
+    lead, _ = _declined_lead(estate_db_with_a_declined_vendor, tmp_path)
+
+    for call in (
+        "get_vendor",
+        "get_vendor_contracts",
+        "get_vendor_purchase_orders",
+        "get_vendor_invoices",
+    ):
+        assert call in lead["tool_calls_made"], lead["tool_calls_made"]
+    # No call is reported twice.
+    assert len(lead["tool_calls_made"]) == len(set(lead["tool_calls_made"]))
+
+
+def test_the_declined_vendor_is_not_accused(
+    estate_db_with_a_declined_vendor, tmp_path
+):
+    lead, submission = _declined_lead(estate_db_with_a_declined_vendor, tmp_path)
+
+    accused = {
+        entity
+        for finding in submission["findings"]
+        for entity in finding["entities"]
+    }
+    assert f"RFC:{DECLINED_RFC}" not in accused
+    assert lead["closed_by"] == "validator"

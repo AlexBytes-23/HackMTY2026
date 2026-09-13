@@ -501,3 +501,30 @@ def test_replay_reads_provider_and_model_from_the_recording(tmp_path):
 def test_replay_refuses_to_guess_a_provider():
     with pytest.raises(ValueError, match="requires 'provider'"):
         ReplayLLMClient(records={"k": "v"}, model="m")
+
+
+# ==========================================================================
+# GEMINI REQUEST PAYLOAD (built without a network call)
+# ==========================================================================
+
+def test_gemini_payload_asks_the_provider_for_json():
+    """Fenced prose is the top cause of a wasted live call; ask for JSON."""
+
+    client = GeminiLLMClient(api_key="k", model="gemini-test")
+
+    payload = client._build_payload("system text", "user text")
+
+    assert payload["generationConfig"] == {"responseMimeType": "application/json"}
+
+
+def test_gemini_payload_carries_both_prompts_unchanged():
+    client = GeminiLLMClient(api_key="k", model="gemini-test")
+
+    payload = client._build_payload("system text", "user text")
+
+    assert payload["contents"] == [
+        {"role": "user", "parts": [{"text": "user text"}]}
+    ]
+    assert payload["systemInstruction"] == {"parts": [{"text": "system text"}]}
+    # Nothing else was added to the request.
+    assert set(payload) == {"contents", "systemInstruction", "generationConfig"}

@@ -16,6 +16,7 @@ import pandas as pd
 from src.core.estate import EstateRepository
 from src.core.models import EvidenceRef, Observation
 from src.graph.bank_graph import build_bank_multidigraph, find_directed_bank_cycles
+from src.output.formatters import with_entity_prefix
 
 
 def _clean_text(value) -> str | None:
@@ -103,7 +104,8 @@ def detect_vendor_to_employee_transfers(
                         signal_type="vendor_to_employee_bank_transfer",
                         entities=[
                             f"RFC:{rfc}",
-                            f"EMP:{emp_id}",
+                            # An estate may already store emp_id as "EMP:0001".
+                            with_entity_prefix("EMP:", emp_id),
                             f"CLABE:{from_clabe}",
                             f"CLABE:{to_clabe}",
                         ],
@@ -329,9 +331,48 @@ def detect_short_window_similar_invoice_clusters(
 
 
 
+def _owner_entities_by_clabe(
+    vendors: pd.DataFrame | None,
+    employees: pd.DataFrame | None,
+) -> dict[str, list[str]]:
+    """Map each bank CLABE recorded in the estate to the entities that own it.
+
+    Ownership is read one account at a time: resolving account A to vendor X
+    establishes the title of A only, and says nothing about any other account in
+    the same cycle.  An account with no recorded owner is simply absent here --
+    no owner is invented for it.
+    """
+
+    owners: dict[str, list[str]] = {}
+
+    def _collect(frame: pd.DataFrame | None, id_column: str, prefix: str) -> None:
+        if frame is None or not {id_column, "bank_clabe"}.issubset(frame.columns):
+            return
+
+        rows = frame[[id_column, "bank_clabe"]].copy()
+        rows["_id"] = rows[id_column].map(_clean_text)
+        rows["_clabe"] = rows["bank_clabe"].map(_clean_text)
+        rows = rows.dropna(subset=["_id", "_clabe"]).drop_duplicates(
+            subset=["_id", "_clabe"]
+        )
+
+        for _, row in rows.iterrows():
+            entity = with_entity_prefix(prefix, row["_id"])
+            bucket = owners.setdefault(row["_clabe"], [])
+            if entity not in bucket:
+                bucket.append(entity)
+
+    _collect(vendors, "rfc", "RFC:")
+    _collect(employees, "emp_id", "EMP:")
+
+    return {clabe: sorted(entities) for clabe, entities in owners.items()}
+
+
 def detect_directed_bank_transfer_cycles(
     bank_txns: pd.DataFrame,
     *,
+    vendors: pd.DataFrame | None = None,
+    employees: pd.DataFrame | None = None,
     max_cycle_length: int = 4,
     max_cycles: int = 50,
 ) -> list[Observation]:
@@ -340,7 +381,15 @@ def detect_directed_bank_transfer_cycles(
     A directed cycle establishes that the supplied estate contains transfers
     along every directed arc in the cycle.  It does *not* establish that the
     same funds traversed the cycle, nor does it establish fraudulent intent.
+
+    ``vendors`` and ``employees`` are optional and are used only to name the
+    registered owner of each account in the cycle, so that the observation's
+    subject is a party rather than an account number.  A CLABE is an internal
+    identifier that may never reach official output; an observation whose only
+    entity is an account therefore loses its subject downstream.
     """
+
+    clabe_owners = _owner_entities_by_clabe(vendors, employees)
 
     graph = build_bank_multidigraph(bank_txns)
     cycles = find_directed_bank_cycles(
@@ -356,6 +405,14 @@ def detect_directed_bank_transfer_cycles(
         amounts = list(cycle.amounts)
         dates = list(cycle.dates)
 
+        # Owners first, so the observation's subject is a party. The accounts stay
+        # in the list because the Investigator needs them to pull transactions.
+        owner_entities: list[str] = []
+        for clabe in cycle.accounts:
+            for entity in clabe_owners.get(clabe, ()):
+                if entity not in owner_entities:
+                    owner_entities.append(entity)
+
         observations.append(
             Observation(
                 observation_id=_observation_id(
@@ -365,7 +422,10 @@ def detect_directed_bank_transfer_cycles(
                 ),
                 detector_name="deterministic_relational",
                 signal_type="directed_bank_transfer_cycle",
-                entities=[f"CLABE:{clabe}" for clabe in cycle.accounts],
+                entities=(
+                    owner_entities
+                    + [f"CLABE:{clabe}" for clabe in cycle.accounts]
+                ),
                 statement=(
                     "The supplied estate contains a directed cycle of recorded "
                     f"bank transfers across {len(cycle.accounts)} CLABEs."
@@ -456,6 +516,8 @@ def run_deterministic_relational_detectors(
     observations.extend(
         detect_directed_bank_transfer_cycles(
             bank_txns=bank_txns,
+            vendors=vendors,
+            employees=employees,
         )
     )
     return observations

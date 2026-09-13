@@ -20,6 +20,7 @@ import pandas as pd
 
 from src.core.estate import EstateRepository
 from src.core.models import EvidenceRef, Observation
+from src.output.formatters import with_entity_prefix
 
 
 def _clean_text(value) -> str | None:
@@ -113,7 +114,8 @@ def detect_vendor_employee_shared_clabe(
                 signal_type="vendor_employee_shared_clabe",
                 entities=[
                     f"RFC:{rfc}",
-                    f"EMP:{emp_id}",
+                    # An estate may already store emp_id as "EMP:0001".
+                    with_entity_prefix("EMP:", emp_id),
                     f"CLABE:{clabe}",
                 ],
                 statement=(

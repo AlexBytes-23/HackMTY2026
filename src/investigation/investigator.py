@@ -15,6 +15,8 @@ from src.investigation.action_bank import (
     list_available_actions,
 )
 
+from src.llm.json_text import strip_code_fences
+
 # ============================================================
 # INTERFAZ DEL MODELO
 # ============================================================
@@ -280,11 +282,18 @@ def parse_investigator_decision(
 
     Después:
         JSON → modelo Pydantic validado
+
+    El modelo suele envolver su JSON en un bloque markdown (```json ...```),
+    incluso cuando se le pide JSON explícitamente, así que quitamos la valla
+    antes de parsear: de lo contrario la primera llamada real falla y el caso
+    se registra como error de ejecución.
     """
 
     try:
         data = json.loads(
-            raw_response
+            strip_code_fences(
+                raw_response
+            )
         )
 
     except json.JSONDecodeError as error:

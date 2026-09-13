@@ -208,3 +208,82 @@ def test_relational_runner_uses_repository_dataframe_boundary():
     assert [obs.signal_type for obs in observations] == [
         "vendor_to_employee_bank_transfer"
     ]
+
+
+# ==========================================================================
+# ENTITY PREFIXES
+# ==========================================================================
+
+def test_vendor_to_employee_transfer_does_not_double_the_employee_prefix():
+    employees = pd.DataFrame(
+        [{"emp_id": "EMP:0001", "bank_clabe": "222222222222222222"}]
+    )
+    bank_txns = pd.DataFrame(
+        [
+            {
+                "txn_id": "TX-1",
+                "date": "2026-01-10",
+                "from_clabe": "111111111111111111",
+                "to_clabe": "222222222222222222",
+                "amount": 25000.0,
+                "reference": "transfer",
+                "channel": "SPEI",
+            }
+        ]
+    )
+
+    obs = detect_vendor_to_employee_transfers(
+        vendors=_vendors(), employees=employees, bank_txns=bank_txns
+    )[0]
+
+    assert "EMP:0001" in obs.entities
+    assert not any(entity.startswith("EMP:EMP:") for entity in obs.entities)
+
+
+# ==========================================================================
+# A BANK CYCLE MUST HAVE A PARTY AS ITS SUBJECT, NOT AN ACCOUNT NUMBER
+# ==========================================================================
+
+def _cycle_txns():
+    return pd.DataFrame(
+        [
+            {"txn_id": "TX-AB", "date": "2026-01-10", "from_clabe": "A",
+             "to_clabe": "B", "amount": 100000.0, "reference": "one",
+             "channel": "SPEI"},
+            {"txn_id": "TX-BA", "date": "2026-01-12", "from_clabe": "B",
+             "to_clabe": "A", "amount": 99000.0, "reference": "two",
+             "channel": "SPEI"},
+        ]
+    )
+
+
+def test_bank_cycle_names_the_registered_owner_of_each_account_first():
+    from src.detectors.deterministic_relational import (
+        detect_directed_bank_transfer_cycles,
+    )
+
+    obs = detect_directed_bank_transfer_cycles(
+        _cycle_txns(),
+        vendors=pd.DataFrame([{"rfc": "AAA010101AAA", "bank_clabe": "A"}]),
+        employees=pd.DataFrame([{"emp_id": "EMP:0007", "bank_clabe": "B"}]),
+    )[0]
+
+    # The subject is a party; the accounts stay available for follow-up actions.
+    assert obs.entities[0] == "RFC:AAA010101AAA"
+    assert obs.entities == ["RFC:AAA010101AAA", "EMP:0007", "CLABE:A", "CLABE:B"]
+
+
+def test_bank_cycle_invents_no_owner_for_an_unregistered_account():
+    """Absence of an owner row is an absence of a record, not a licence to guess."""
+
+    from src.detectors.deterministic_relational import (
+        detect_directed_bank_transfer_cycles,
+    )
+
+    obs = detect_directed_bank_transfer_cycles(
+        _cycle_txns(),
+        vendors=pd.DataFrame([{"rfc": "AAA010101AAA", "bank_clabe": "A"}]),
+        employees=pd.DataFrame(columns=["emp_id", "bank_clabe"]),
+    )[0]
+
+    assert obs.entities == ["RFC:AAA010101AAA", "CLABE:A", "CLABE:B"]
