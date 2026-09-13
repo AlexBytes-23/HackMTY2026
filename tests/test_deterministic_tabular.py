@@ -194,6 +194,10 @@ class FakeEstate:
     def get_all(self, table_name):
         return self.tables[table_name].copy()
 
+    def table_df(self, table):
+        import pandas as pd
+        return pd.DataFrame(self.get_all(table))
+
 
 def test_runner_returns_shared_observation_contract():
 

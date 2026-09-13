@@ -390,9 +390,11 @@ def run_deterministic_tabular_detectors(
     provenance requirements have been reviewed.
     """
 
-    vendors = estate.get_all("vendors")
-    employees = estate.get_all("employees")
-    efos_list = estate.get_all("efos_list")
+    # Detectors operate on DataFrames. Use the repository's explicit
+    # DataFrame boundary rather than get_all(), which returns list[dict].
+    vendors = estate.table_df("vendors")
+    employees = estate.table_df("employees")
+    efos_list = estate.table_df("efos_list")
 
     observations: list[Observation] = []
 
