@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import socket
 import os
 import time
 import urllib.error
@@ -58,7 +60,8 @@ class GeminiLLMClient:
         self,
         api_key: str | None = None,
         model: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = 90.0,
+        max_attempts: int = 4,
         base_url: str = "https://generativelanguage.googleapis.com/v1beta",
     ):
         key = api_key or os.getenv("GEMINI_API_KEY")
@@ -71,6 +74,7 @@ class GeminiLLMClient:
         self.model = mdl
         self.provider = "gemini"
         self.timeout = timeout
+        self.max_attempts = max(1, int(max_attempts))
         self.base_url = base_url.rstrip("/")
         self.last_usage: dict[str, int | None] | None = None
 
@@ -93,7 +97,48 @@ class GeminiLLMClient:
             "generationConfig": {"responseMimeType": "application/json"},
         }
 
+    # Errors worth trying again. A rate limit and a dropped read are facts
+    # about the network, not about the evidence, and losing a whole case to one
+    # is the single largest avoidable cause of lost recall we measured: on one
+    # estate 6 of 16 cases died this way and none of them had anything wrong
+    # with their reasoning.
+    RETRYABLE_STATUS = (408, 409, 429, 500, 502, 503, 504)
+
+    @staticmethod
+    def _retry_delay_from(body: str, attempt: int) -> float:
+        """Honour the delay the API asks for; otherwise back off exponentially."""
+        match = re.search(r'"retryDelay"\s*:\s*"([0-9.]+)s"', body or "")
+        if match:
+            try:
+                return min(float(match.group(1)) + 0.5, 65.0)
+            except ValueError:
+                pass
+        return min(2.0 * (2 ** attempt), 30.0)
+
     def complete(self, system_prompt: str, user_prompt: str) -> str:
+        last_error: Exception | None = None
+        for attempt in range(self.max_attempts):
+            try:
+                return self._complete_once(system_prompt, user_prompt)
+            except RuntimeError as error:
+                status = getattr(error, "http_status", None)
+                if status not in self.RETRYABLE_STATUS:
+                    raise
+                last_error = error
+                if attempt == self.max_attempts - 1:
+                    break
+                time.sleep(self._retry_delay_from(str(error), attempt))
+            except (TimeoutError, socket.timeout, urllib.error.URLError) as error:
+                last_error = error
+                if attempt == self.max_attempts - 1:
+                    break
+                time.sleep(min(2.0 * (2 ** attempt), 30.0))
+        raise RuntimeError(
+            "Gemini call failed after %d attempt(s): %s"
+            % (self.max_attempts, last_error)
+        ) from None
+
+    def _complete_once(self, system_prompt: str, user_prompt: str) -> str:
         url = f"{self.base_url}/models/{self.model}:generateContent"
         payload = self._build_payload(system_prompt, user_prompt)
         data = json.dumps(payload).encode("utf-8")
@@ -110,7 +155,11 @@ class GeminiLLMClient:
             err_body = e.read().decode("utf-8", errors="replace")
             if self.api_key in err_body:
                 err_body = err_body.replace(self.api_key, "***")
-            raise RuntimeError(f"Gemini API error ({e.code}): {err_body}") from None
+            failure = RuntimeError(f"Gemini API error ({e.code}): {err_body}")
+            # Carry the status so the retry loop can tell a rate limit from a
+            # bad request. A 400 must never be retried.
+            failure.http_status = e.code
+            raise failure from None
         except urllib.error.URLError as e:
             reason = str(e.reason)
             if self.api_key in reason:
