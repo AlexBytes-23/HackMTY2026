@@ -11,16 +11,31 @@ from src.verifier.official_verifier import VerificationReport, VerificationCheck
 class MockEstate(EstateRepository):
     def __init__(self):
         self.db_path = ":memory:"
+        # The efos_list rows carry a definitive status and a publication_date the
+        # invoices postdate: build_finding now names entities from the same
+        # deterministic assessment the verifier runs, and a bare rfc qualifies
+        # nobody.
         self.records = {
             "efos_list": {
-                "EFOS123": {"rfc": "EFOS123"},
-                "EFOS_UNRELATED": {"rfc": "OTHER_RFC"},
+                "EFOS123": {
+                    "rfc": "EFOS123",
+                    "status": "definitivo",
+                    "publication_date": "2025-03-01",
+                },
+                "EFOS_UNRELATED": {
+                    "rfc": "OTHER_RFC",
+                    "status": "definitivo",
+                    "publication_date": "2025-03-01",
+                },
             },
             "invoices": {
-                "inv_1": {"issuer_rfc": "EFOS123"},
-                "inv_2": {"issuer_rfc": "EFOS123"},
-                "inv_3": {"issuer_rfc": "EFOS123"},
-                "inv_unrelated": {"issuer_rfc": "UNRELATED_INV_RFC"},
+                "inv_1": {"issuer_rfc": "EFOS123", "issue_date": "2025-04-01"},
+                "inv_2": {"issuer_rfc": "EFOS123", "issue_date": "2025-04-05"},
+                "inv_3": {"issuer_rfc": "EFOS123", "issue_date": "2025-04-09"},
+                "inv_unrelated": {
+                    "issuer_rfc": "UNRELATED_INV_RFC",
+                    "issue_date": "2025-04-11",
+                },
             },
         }
 

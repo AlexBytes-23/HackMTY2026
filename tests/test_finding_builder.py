@@ -12,22 +12,42 @@ def mock_estate():
     class MockEstate(EstateRepository):
         def __init__(self):
             self.db_path = ":memory:"
+            # A usable efos_list row carries a definitive status and a
+            # publication_date its invoices postdate: build_finding derives both
+            # the accused entities and the narrative's timing facts from the same
+            # deterministic assessment the verifier runs, so a bare rfc is no
+            # longer enough to name anyone.
             self.records = {
                 "efos_list": {
-                    "EFOS123": {"rfc": "EFOS123"},
-                    "EFOS_UNRELATED": {"rfc": "OTHER_RFC"},
-                    "ODD_ID": {"rfc": "VALID_RFC"},
+                    "EFOS123": {
+                        "rfc": "EFOS123",
+                        "status": "definitivo",
+                        "publication_date": "2025-03-01",
+                    },
+                    "EFOS_UNRELATED": {
+                        "rfc": "OTHER_RFC",
+                        "status": "definitivo",
+                        "publication_date": "2025-03-01",
+                    },
+                    "ODD_ID": {
+                        "rfc": "VALID_RFC",
+                        "status": "definitivo",
+                        "publication_date": "2025-03-01",
+                    },
                     "MISSING": {"other": "val"},
                     "NONE_RFC": {"rfc": None},
                     "EMPTY_RFC": {"rfc": "   "},
                     "INT_RFC": {"rfc": 12345}
                 },
                 "invoices": {
-                    "inv_1": {"issuer_rfc": "EFOS123"},
-                    "inv_2": {"issuer_rfc": "EFOS123"},
-                    "inv_3": {"issuer_rfc": "EFOS123"},
-                    "inv_unrelated": {"issuer_rfc": "UNRELATED_INV_RFC"},
-                    "inv_valid": {"issuer_rfc": "VALID_RFC"}
+                    "inv_1": {"issuer_rfc": "EFOS123", "issue_date": "2025-04-01"},
+                    "inv_2": {"issuer_rfc": "EFOS123", "issue_date": "2025-04-05"},
+                    "inv_3": {"issuer_rfc": "EFOS123", "issue_date": "2025-04-09"},
+                    "inv_unrelated": {
+                        "issuer_rfc": "UNRELATED_INV_RFC",
+                        "issue_date": "2025-04-11",
+                    },
+                    "inv_valid": {"issuer_rfc": "VALID_RFC", "issue_date": "2025-04-15"}
                 }
             }
         def get_record(self, table: str, record_id: str) -> dict | None:
@@ -215,30 +235,30 @@ def test_efos_no_intersection_refuses(registry, mock_estate):
         EvidenceRef(source_table="invoices", record_id="inv_1"),
         EvidenceRef(source_table="invoices", record_id="inv_unrelated")
     ]
-    with pytest.raises(ValueError, match="No RFC intersection found"):
+    with pytest.raises(ValueError, match="Cannot safely extract entity"):
         build_finding(**inputs)
 
 def test_efos_missing_rfc_refuses(registry, mock_estate):
     inputs = make_inputs(mock_estate, efos_record_id="MISSING")
     inputs["rule_registry"] = registry
-    # intersection will fail
-    with pytest.raises(ValueError, match="No RFC intersection found"):
+    # the assessment cannot extract a usable RFC
+    with pytest.raises(ValueError, match="Cannot safely extract entity"):
         build_finding(**inputs)
 
 def test_efos_none_rfc_refuses(registry, mock_estate):
     inputs = make_inputs(mock_estate, efos_record_id="NONE_RFC")
     inputs["rule_registry"] = registry
-    with pytest.raises(ValueError, match="No RFC intersection found"):
+    with pytest.raises(ValueError, match="Cannot safely extract entity"):
         build_finding(**inputs)
 
 def test_efos_empty_rfc_refuses(registry, mock_estate):
     inputs = make_inputs(mock_estate, efos_record_id="EMPTY_RFC")
     inputs["rule_registry"] = registry
-    with pytest.raises(ValueError, match="No RFC intersection found"):
+    with pytest.raises(ValueError, match="Cannot safely extract entity"):
         build_finding(**inputs)
 
 def test_efos_wrong_type_rfc_refuses(registry, mock_estate):
     inputs = make_inputs(mock_estate, efos_record_id="INT_RFC")
     inputs["rule_registry"] = registry
-    with pytest.raises(ValueError, match="No RFC intersection found"):
+    with pytest.raises(ValueError, match="Cannot safely extract entity"):
         build_finding(**inputs)

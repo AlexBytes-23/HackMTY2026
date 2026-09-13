@@ -159,65 +159,71 @@ def build_finding(
             )
         )
 
-    # 7. Entity attribution is limited to RFCs participating in the same factual
-    # EFOS/invoice relation that the current verifier checks.  This reconstruction
-    # is temporary debt until VerificationCheck.evidence carries the exact matched
-    # records directly.
-    efos_rfcs: set[str] = set()
-    invoice_rfcs: set[str] = set()
-
-    for ref in unique_refs.values():
-        if ref.source_table == "efos_list":
-            rec = estate.get_record(ref.source_table, str(ref.record_id))
-            if rec and "rfc" in rec:
-                val = rec["rfc"]
-                if isinstance(val, str) and val.strip():
-                    efos_rfcs.add(val.strip())
-        elif ref.source_table == "invoices":
-            rec = estate.get_record(ref.source_table, str(ref.record_id))
-            if rec and "issuer_rfc" in rec:
-                val = rec["issuer_rfc"]
-                if isinstance(val, str) and val.strip():
-                    invoice_rfcs.add(val.strip())
-
-    matched_rfcs = efos_rfcs.intersection(invoice_rfcs)
-    if not matched_rfcs:
-        raise ValueError(
-            "Cannot safely extract entity. No RFC intersection found between "
-            "efos_list and invoices despite verified status."
-        )
-
-    entities = [f"RFC:{rfc}" for rfc in sorted(matched_rfcs)]
-
-    # 8. Narrative reports only the facts established by the deterministic checks.
-    matched_text = ", ".join(sorted(matched_rfcs))
-
-    # The timing relationship is re-derived from the estate, never from prose: the
-    # same deterministic assessment the verifier ran.  It is stated only when the
-    # supplied records actually establish it; otherwise the sentence is omitted
-    # rather than softened into an unsupported claim.
-    timing_sentence = ""
+    # 7. Entity attribution and the timing facts come from ONE deterministic
+    # assessment -- the same one the verifier ran -- never from a second,
+    # independently recomputed RFC intersection here.  Two computations of "which
+    # RFCs qualify" is precisely what would let a verified check and an emitted
+    # finding disagree about who is accused: an unfiltered intersection would name
+    # a merely presumed vendor cited alongside a definitively listed one.
     assessment = assess_efos_status_and_timing(
         estate,
         [ref for ref in unique_refs.values() if ref.source_table == "efos_list"],
         [ref for ref in unique_refs.values() if ref.source_table == "invoices"],
     )
-    if assessment.status == "verified":
-        published = sorted(set(assessment.publication_dates.values()))
-        issued = assessment.qualifying_invoice_dates
-        # Ranges, not full lists: the official validator counts narrative words.
-        published_text = (
-            published[0]
-            if len(published) == 1
-            else f"between {published[0]} and {published[-1]}"
+
+    if assessment.status != "verified" or not assessment.matched_rfcs:
+        raise ValueError(
+            "Cannot safely extract entity. The deterministic EFOS status/timing "
+            "assessment does not hold for the cited records, so no RFC may be "
+            f"named: {assessment.calculation}"
         )
-        issued_text = (
-            issued[0] if len(issued) == 1 else f"between {issued[0]} and {issued[-1]}"
+
+    # On a verified assessment these name the same RFCs. If they ever diverge, the
+    # assessment is not the single source of truth it is documented to be, and
+    # refusing is the only safe response.
+    if set(assessment.matched_rfcs) != set(assessment.publication_dates):
+        raise ValueError(
+            "Internal inconsistency: the verified EFOS assessment's matched RFCs "
+            "and qualifying publication dates disagree, so entity attribution "
+            "cannot be trusted."
         )
+
+    matched_rfcs = sorted(assessment.matched_rfcs)
+    entities = [f"RFC:{rfc}" for rfc in matched_rfcs]
+
+    # 8. Narrative reports only the facts established by the deterministic checks.
+    matched_text = ", ".join(matched_rfcs)
+
+    published = sorted(set(assessment.publication_dates.values()))
+    qualifying = assessment.qualifying_invoice_dates
+    attributed = assessment.attributed_invoice_count
+
+    # Ranges, not full lists: the official validator counts narrative words, and a
+    # range cannot grow with the number of records.
+    def _span(dates: list[str]) -> str:
+        return dates[0] if len(dates) == 1 else f"between {dates[0]} and {dates[-1]}"
+
+    # The timing check is existential over each issuer's own invoices -- one
+    # qualifying invoice per matched RFC verifies it -- while claimed_amount sums
+    # every cited invoice.  So the narrative states the count it actually
+    # established and openly accounts for the rest.  Asserting that "every cited
+    # invoice" postdates the listing would be falsifiable from this finding's own
+    # exhibit table, which is worse than saying less.
+    if len(qualifying) == attributed:
         timing_sentence = (
             "Those efos_list records carry a definitive listing status published "
-            f"{published_text}, and every cited invoice counted here was issued on "
-            f"or after that publication date ({issued_text}). "
+            f"{_span(published)}, and all {attributed} cited invoices issued by "
+            "those RFC(s) were issued on or after that publication date "
+            f"({_span(qualifying)}). "
+        )
+    else:
+        timing_sentence = (
+            "Those efos_list records carry a definitive listing status published "
+            f"{_span(published)}. {len(qualifying)} of the {attributed} cited "
+            "invoices issued by those RFC(s) were issued on or after that "
+            f"publication date ({_span(qualifying)}); the remaining "
+            f"{attributed - len(qualifying)} do not postdate it and are still "
+            "included in the amount below. "
         )
 
     narrative = (

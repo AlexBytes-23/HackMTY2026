@@ -33,7 +33,7 @@ from src.agents.challenger import ChallengerReview
 from src.agents.method_critic import MethodCriticReview
 from src.core.estate import ID_COLUMN, OFFICIAL_COLUMNS, EstateRepository
 from src.core.models import CaseEvidence, CaseState, EvidenceRef, Hypothesis
-from src.gates.evidence_gate import evaluate_gate
+from src.gates.evidence_gate import EvidenceGateDecision, evaluate_gate
 from src.investigation.claim_builder import build_phantom_vendor_claim
 from src.llm.runtime import InstrumentedLLMClient
 from src.output.finding_builder import build_finding
@@ -47,8 +47,13 @@ from src.verifier.official_verifier import (
     EFOS_STATUS_DEFINITIVE,
     EFOS_STATUS_PRESUMED,
     OfficialVerifier,
+    VerificationCheck,
+    VerificationReport,
 )
 
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+VERIFIER_SOURCE = REPO_ROOT / "src" / "verifier" / "official_verifier.py"
 
 # The innocent decoy and the true positive, exactly as the held-out estate has them.
 INNOCENT_RFC = "GAL160126E3F"
@@ -273,7 +278,9 @@ def test_qualifying_status_is_a_named_module_level_constant():
     assert EFOS_STATUS_DEFINITIVE == "definitivo"
     assert EFOS_STATUS_PRESUMED == "presunto"
 
-    source = Path("src/verifier/official_verifier.py").read_text(encoding="utf-8")
+    # Resolved from this file, not from the cwd: a cwd-relative path would make
+    # the assertion silently vacuous when pytest runs from another directory.
+    source = VERIFIER_SOURCE.read_text(encoding="utf-8")
     assert f'EFOS_STATUS_DEFINITIVE = "{EFOS_STATUS_DEFINITIVE}"' in source
     assert f'EFOS_STATUS_PRESUMED = "{EFOS_STATUS_PRESUMED}"' in source
 
@@ -494,6 +501,324 @@ def test_absent_status_column_is_unresolved():
 
 
 # ==========================================================================
+# REGRESSION: BUNDLING A PRESUNTO VENDOR WITH A DEFINITIVO ONE
+# ==========================================================================
+#
+# The status condition is UNIVERSAL over the matched RFCs, not existential. A
+# finding's entities and its claimed_amount span every matched RFC, so "at least
+# one is definitivo" would let a merely presumed vendor be named -- and its
+# invoices counted -- on the strength of a different vendor's listing. That is
+# the same false accusation this module exists to prevent, reached by bundling.
+
+MIXED_DEF_RFC = "DEF010101AA1"
+MIXED_PRE_RFC = "PRE010101AA1"
+
+
+@pytest.fixture
+def bundled_estate(tmp_path):
+    """One definitivo vendor and one presunto vendor, cited by the same case."""
+
+    db_path = tmp_path / "bundled.db"
+    conn = sqlite3.connect(db_path)
+    _create_tables(conn)
+    conn.execute(
+        "INSERT INTO efos_list (rfc, status, publication_date) VALUES (?, ?, ?)",
+        (MIXED_DEF_RFC, EFOS_STATUS_DEFINITIVE, "2025-03-14"),
+    )
+    conn.execute(
+        "INSERT INTO efos_list (rfc, status, publication_date) VALUES (?, ?, ?)",
+        (MIXED_PRE_RFC, EFOS_STATUS_PRESUMED, "2025-12-12"),
+    )
+    conn.execute(
+        "INSERT INTO invoices (uuid, issuer_rfc, receiver_rfc, total, issue_date) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("INV-D01", MIXED_DEF_RFC, COMPANY_RFC, "100000.00", "2025-04-09"),
+    )
+    conn.execute(
+        "INSERT INTO invoices (uuid, issuer_rfc, receiver_rfc, total, issue_date) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("INV-P01", MIXED_PRE_RFC, COMPANY_RFC, "900000.00", "2025-01-20"),
+    )
+    conn.commit()
+    conn.close()
+
+    repository = EstateRepository(db_path)
+    yield repository
+    repository.close()
+
+
+def _bundled_case() -> CaseState:
+    target = "H-bundled"
+    evidence = [
+        CaseEvidence(
+            evidence_id="ev-efos-def",
+            statement=f"RFC {MIXED_DEF_RFC} appears in efos_list.",
+            direction="for",
+            produced_by="test",
+            source_refs=[EvidenceRef(source_table="efos_list",
+                                     record_id=MIXED_DEF_RFC, note="EFOS row.")],
+        ),
+        CaseEvidence(
+            evidence_id="ev-efos-pre",
+            statement=f"RFC {MIXED_PRE_RFC} appears in efos_list.",
+            direction="for",
+            produced_by="test",
+            source_refs=[EvidenceRef(source_table="efos_list",
+                                     record_id=MIXED_PRE_RFC, note="EFOS row.")],
+        ),
+        CaseEvidence(
+            evidence_id="ev-inv-def",
+            statement="Invoice INV-D01 exists.",
+            direction="for",
+            produced_by="test",
+            source_refs=[EvidenceRef(source_table="invoices",
+                                     record_id="INV-D01", note="CFDI.")],
+        ),
+        CaseEvidence(
+            evidence_id="ev-inv-pre",
+            statement="Invoice INV-P01 exists.",
+            direction="for",
+            produced_by="test",
+            source_refs=[EvidenceRef(source_table="invoices",
+                                     record_id="INV-P01", note="CFDI.")],
+        ),
+    ]
+    return CaseState(
+        case_id="case-bundled",
+        lead_id="lead-bundled",
+        status="ready_for_verification",
+        hypotheses=[
+            Hypothesis(
+                hypothesis_id=target,
+                statement="Two listed issuers invoiced the audited company.",
+                scheme_type="phantom_vendor",
+                status="supported",
+                supporting_evidence_ids=[e.evidence_id for e in evidence],
+            )
+        ],
+        evidence=evidence,
+    )
+
+
+def test_bundling_a_presunto_vendor_does_not_authorize(bundled_estate):
+    case_state = _bundled_case()
+    target = case_state.hypotheses[0].hypothesis_id
+    registry = build_default_registry()
+    rule_id = default_rule_id_for_scheme("phantom_vendor")
+
+    claim = build_phantom_vendor_claim(case_state, target, bundled_estate)
+    report = OfficialVerifier().verify(
+        case_state, target, bundled_estate, claimed_amount=claim.claimed_amount
+    )
+    check = next(
+        c for c in report.checks if c.check_id == "PHANTOM-EFOS-INVOICE-LINK"
+    )
+
+    assert check.status == "unresolved"
+    assert MIXED_PRE_RFC in check.calculation
+
+    decision = evaluate_gate(
+        case_state=case_state,
+        target_hypothesis_id=target,
+        challenger_review=ChallengerReview(
+            target_hypothesis_id=target, outcome="survives",
+            reasoning_summary="Synthesised.", survives_challenge=True),
+        method_critic_review=MethodCriticReview(
+            target_hypothesis_id=target, outcome="clear",
+            reasoning_summary="Synthesised."),
+        verification_report=report,
+        rule_registry=registry,
+        requested_rule_id=rule_id,
+    )
+    assert decision.outcome != "authorize_probable"
+
+
+def test_builder_never_names_a_presunto_rfc_even_on_a_forged_verified_report(
+    bundled_estate,
+):
+    """Defense in depth: the builder must not trust a report it did not produce.
+
+    This is the property, not the symptom: whatever upstream claims, no RFC may
+    reach ``entities`` unless the deterministic assessment qualifies it.
+    """
+
+    case_state = _bundled_case()
+    target = case_state.hypotheses[0].hypothesis_id
+    registry = build_default_registry()
+
+    forged = VerificationReport(
+        target_hypothesis_id=target,
+        checks=[
+            VerificationCheck(check_id="PESO-RECONCILIATION", statement="",
+                              status="verified", critical=True),
+            VerificationCheck(check_id="PHANTOM-EFOS-INVOICE-LINK", statement="",
+                              status="verified", critical=True),
+        ],
+        resolved_exhibits=[
+            EvidenceRef(source_table="efos_list", record_id=MIXED_DEF_RFC),
+            EvidenceRef(source_table="efos_list", record_id=MIXED_PRE_RFC),
+            EvidenceRef(source_table="invoices", record_id="INV-D01"),
+            EvidenceRef(source_table="invoices", record_id="INV-P01"),
+        ],
+        reconciliation={"reconciles": True},
+    )
+    decision = EvidenceGateDecision(
+        target_hypothesis_id=target,
+        outcome="authorize_probable",
+        authorized_confidence="probable",
+        reason="forged for this test",
+    )
+
+    with pytest.raises(ValueError, match="Cannot safely extract entity"):
+        build_finding(
+            case_state=case_state,
+            target_hypothesis_id=target,
+            gate_decision=decision,
+            verification_report=forged,
+            rule_registry=registry,
+            requested_rule_id=default_rule_id_for_scheme("phantom_vendor"),
+            claimed_amount=1_000_000.00,
+            estate=bundled_estate,
+        )
+
+
+def test_entities_are_never_recomputed_from_a_raw_rfc_intersection():
+    """The builder must consume the assessment, not re-derive who qualifies.
+
+    Two independent computations of "which RFCs qualify" is what let a verified
+    check and an emitted finding disagree in the first place.
+    """
+
+    source = (REPO_ROOT / "src" / "output" / "finding_builder.py").read_text(
+        encoding="utf-8"
+    )
+    assert "assessment.matched_rfcs" in source
+    assert ".intersection(" not in source
+
+
+# ==========================================================================
+# REGRESSION: THE NARRATIVE MAY NOT OVERSTATE THE TIMING CHECK
+# ==========================================================================
+#
+# The timing condition is EXISTENTIAL (one qualifying invoice verifies it) while
+# claimed_amount sums EVERY cited invoice. A narrative asserting that every cited
+# invoice postdates the listing would therefore be falsifiable from the finding's
+# own exhibit table.
+
+MIXED_TIMING_RFC = "MIX010101AA1"
+MIXED_TIMING_INVOICES = [
+    ("INV-T01", "2024-01-10", "1000000.00"),   # predates publication
+    ("INV-T02", "2024-06-10", "1000000.00"),   # predates publication
+    ("INV-T03", "2025-04-09", "500000.00"),    # postdates publication
+]
+MIXED_TIMING_PUBLICATION = "2025-03-14"
+
+
+@pytest.fixture
+def mixed_timing_estate(tmp_path):
+    db_path = tmp_path / "mixed_timing.db"
+    conn = sqlite3.connect(db_path)
+    _create_tables(conn)
+    conn.execute(
+        "INSERT INTO efos_list (rfc, status, publication_date) VALUES (?, ?, ?)",
+        (MIXED_TIMING_RFC, EFOS_STATUS_DEFINITIVE, MIXED_TIMING_PUBLICATION),
+    )
+    for uuid_value, issue_date, total in MIXED_TIMING_INVOICES:
+        conn.execute(
+            "INSERT INTO invoices (uuid, issuer_rfc, receiver_rfc, total, issue_date) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (uuid_value, MIXED_TIMING_RFC, COMPANY_RFC, total, issue_date),
+        )
+    conn.commit()
+    conn.close()
+
+    repository = EstateRepository(db_path)
+    yield repository
+    repository.close()
+
+
+def _finding_for(estate: EstateRepository, rfc, invoices):
+    case_state, claim, report, decision, _, registry, rule_id = (
+        _run_deterministic_path(estate, rfc, invoices)
+    )
+    assert decision.outcome == "authorize_probable"
+    return claim, build_finding(
+        case_state=case_state,
+        target_hypothesis_id=case_state.hypotheses[0].hypothesis_id,
+        gate_decision=decision,
+        verification_report=report,
+        rule_registry=registry,
+        requested_rule_id=rule_id,
+        claimed_amount=claim.claimed_amount,
+        estate=estate,
+    )
+
+
+def _assert_narrative_matches_the_exhibits(finding, estate, publication):
+    """The property: the narrative's timing claim must hold for the cited invoices.
+
+    Recomputed from the finding's own exhibit table -- exactly what a judge would
+    do to falsify it.
+    """
+
+    issue_dates = []
+    for exhibit in finding.exhibits:
+        if exhibit.source_table != "invoices":
+            continue
+        record = estate.get_record("invoices", exhibit.record_id)
+        issue_dates.append(record["issue_date"])
+
+    postdating = [d for d in issue_dates if d >= publication]
+    narrative = finding.narrative
+
+    if len(postdating) == len(issue_dates):
+        assert f"all {len(issue_dates)} cited invoices" in narrative
+    else:
+        # A universal claim would be falsifiable from the exhibits above.
+        assert "all " not in narrative
+        assert f"{len(postdating)} of the {len(issue_dates)} cited invoices" in narrative
+        assert str(len(issue_dates) - len(postdating)) in narrative
+        assert "included in the amount" in narrative
+    return issue_dates, postdating
+
+
+def test_narrative_does_not_claim_every_invoice_postdates_publication(
+    mixed_timing_estate,
+):
+    claim, finding = _finding_for(
+        mixed_timing_estate, MIXED_TIMING_RFC, MIXED_TIMING_INVOICES
+    )
+
+    # The claim still covers every cited invoice, including the two that predate
+    # the listing: narrowing it would break the per-table peso reconciliation.
+    assert claim.claimed_amount == pytest.approx(2_500_000.00)
+    assert finding.peso_amount == pytest.approx(2_500_000.00)
+
+    issue_dates, postdating = _assert_narrative_matches_the_exhibits(
+        finding, mixed_timing_estate, MIXED_TIMING_PUBLICATION
+    )
+    assert len(issue_dates) == 3
+    assert len(postdating) == 1
+    assert len(finding.narrative.split()) <= 150
+
+
+def test_narrative_may_say_all_only_when_every_cited_invoice_postdates(estate):
+    _claim, finding = _finding_for(estate, GUILTY_RFC, GUILTY_INVOICES)
+    _assert_narrative_matches_the_exhibits(finding, estate, GUILTY_PUBLICATION)
+    assert f"all {len(GUILTY_INVOICES)} cited invoices" in finding.narrative
+
+
+def test_check_calculation_reports_the_prepublication_invoices(mixed_timing_estate):
+    _, _, _, _, check, _, _ = _run_deterministic_path(
+        mixed_timing_estate, MIXED_TIMING_RFC, MIXED_TIMING_INVOICES
+    )
+    assert check.status == "verified"
+    assert "1 of 3 cited invoice(s)" in check.calculation
+    assert "2 PREDATE publication" in check.calculation
+    assert "2024-01-10" in check.calculation
+
+
+# ==========================================================================
 # NARRATIVE
 # ==========================================================================
 
@@ -521,7 +846,12 @@ def test_narrative_states_the_timing_relationship(estate):
 
 
 def test_narrative_stays_under_150_words_for_a_wide_multi_rfc_finding(tmp_path):
-    """Worst realistic case: many listed issuers and many invoices in one finding."""
+    """Worst realistic case: many listed issuers, many invoices, mixed timing.
+
+    Mixed timing on purpose: it selects the LONGER narrative branch (the one that
+    must account for the invoices predating publication), so this measures the
+    real ceiling and not the short branch.
+    """
 
     db_path = tmp_path / "wide.db"
     conn = sqlite3.connect(db_path)
@@ -538,12 +868,19 @@ def test_narrative_stays_under_150_words_for_a_wide_multi_rfc_finding(tmp_path):
         )
         for i_index in range(1, 9):
             uuid_value = f"INV-W{r_index}{i_index:02d}"
+            # Half predate the 2025 publication dates, half postdate them, so every
+            # RFC has a qualifying invoice AND the narrative must account for the
+            # rest -- the longer of the two branches.
+            issue_date = (
+                f"2024-0{i_index}-{i_index:02d}"
+                if i_index % 2
+                else f"2025-1{i_index % 2}-{i_index:02d}"
+            )
             conn.execute(
                 "INSERT INTO invoices "
                 "(uuid, issuer_rfc, receiver_rfc, total, issue_date) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (uuid_value, rfc, COMPANY_RFC, "123456.78",
-                 f"2025-1{i_index % 2}-{i_index:02d}"),
+                (uuid_value, rfc, COMPANY_RFC, "123456.78", issue_date),
             )
             invoices.append((uuid_value, "", ""))
     conn.commit()
@@ -626,6 +963,84 @@ def test_narrative_stays_under_150_words_for_a_wide_multi_rfc_finding(tmp_path):
             estate=repository,
         )
         assert len(finding.narrative.split()) <= 150
+        # The longer branch really was taken.
+        assert "included in the amount" in finding.narrative
+    finally:
+        repository.close()
+
+
+def test_a_listed_rfc_may_not_ride_in_on_another_rfcs_timing(tmp_path):
+    """Condition 3 is universal over the matched RFCs, not just over the set.
+
+    Two definitively listed vendors; only one has an invoice postdating its own
+    listing. Naming both would attribute the second vendor's exposure to a
+    listing that demonstrably does not reach any of its cited invoices.
+    """
+
+    db_path = tmp_path / "ride_along.db"
+    conn = sqlite3.connect(db_path)
+    _create_tables(conn)
+    for rfc, published in (("AAA010101AA1", "2025-03-14"), ("BBB010101BB2", "2025-06-01")):
+        conn.execute(
+            "INSERT INTO efos_list (rfc, status, publication_date) VALUES (?, ?, ?)",
+            (rfc, EFOS_STATUS_DEFINITIVE, published),
+        )
+    conn.execute(
+        "INSERT INTO invoices (uuid, issuer_rfc, receiver_rfc, total, issue_date) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("INV-A01", "AAA010101AA1", COMPANY_RFC, "100000.00", "2025-04-09"),
+    )
+    # Every cited invoice of BBB predates ITS OWN publication date.
+    conn.execute(
+        "INSERT INTO invoices (uuid, issuer_rfc, receiver_rfc, total, issue_date) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("INV-B01", "BBB010101BB2", COMPANY_RFC, "900000.00", "2025-01-20"),
+    )
+    conn.commit()
+    conn.close()
+
+    repository = EstateRepository(db_path)
+    try:
+        target = "H-ride"
+        evidence = [
+            CaseEvidence(
+                evidence_id=f"ev-{table}-{record_id}",
+                statement="",
+                direction="for",
+                produced_by="test",
+                source_refs=[EvidenceRef(source_table=table, record_id=record_id,
+                                         note="Record.")],
+            )
+            for table, record_id in (
+                ("efos_list", "AAA010101AA1"),
+                ("efos_list", "BBB010101BB2"),
+                ("invoices", "INV-A01"),
+                ("invoices", "INV-B01"),
+            )
+        ]
+        case_state = CaseState(
+            case_id="case-ride",
+            lead_id="lead-ride",
+            status="ready_for_verification",
+            hypotheses=[
+                Hypothesis(
+                    hypothesis_id=target,
+                    statement="",
+                    scheme_type="phantom_vendor",
+                    status="supported",
+                    supporting_evidence_ids=[e.evidence_id for e in evidence],
+                )
+            ],
+            evidence=evidence,
+        )
+        report = OfficialVerifier().verify(
+            case_state, target, repository, claimed_amount=1_000_000.00
+        )
+        check = next(
+            c for c in report.checks if c.check_id == "PHANTOM-EFOS-INVOICE-LINK"
+        )
+        assert check.status == "unresolved"
+        assert "BBB010101BB2" in check.calculation
     finally:
         repository.close()
 
