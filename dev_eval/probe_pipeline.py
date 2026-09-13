@@ -50,6 +50,13 @@ EXPECTED_TO_SIGNAL = {
     "S4_threshold_splitting_1",
 }
 
+# Schemes that must still reach an authorised finding. One listed here and no
+# longer authorising is a regression, not a judgement call.
+EXPECTED_TO_AUTHORISE = {
+    "S1_phantom_vendor_1",
+    "S2_kickback_1",
+}
+
 
 def _hr(title: str) -> None:
     print()
@@ -328,6 +335,150 @@ def run_authorisation(gt, scheme_of, decoy_of, out_path: Path):
     }
 
 
+
+def run_kickback_authorisation(gt, scheme_of, decoy_of, estate, registry):
+    """Ask the kickback path about every vendor-to-employee transfer pair.
+
+    The phantom stage enumerates EFOS-matched vendors; this one enumerates the
+    other verifiable scheme, so the regression gate covers both instead of one.
+    Hand-picking the planted pair would stop measuring the moment the verifier
+    changes shape.
+    """
+    from src.core.models import (CaseEvidence, CaseState, EvidenceRef,
+                                 Hypothesis, InvestigationLoopResult)
+    from src.agents.challenger import ChallengerReview
+    from src.agents.method_critic import MethodCriticReview
+    from src.investigation.preverification_pipeline import PreVerificationResult
+    from src.investigation.review_orchestrator import (ReviewOrchestrationResult,
+                                                       ReviewRound)
+    from src.investigation.postverification_pipeline import (
+        run_postverification_pipeline)
+    from src.output.finding_builder import build_finding
+    from src.rules.default_rules import default_rule_id_for_scheme
+
+    rule_id = default_rule_id_for_scheme("kickback")
+    conn = sqlite3.connect(ESTATE)
+    pairs = conn.execute(
+        "SELECT DISTINCT v.rfc, e.emp_id FROM bank_txns b "
+        "JOIN vendors v ON v.bank_clabe = b.from_clabe "
+        "JOIN employees e ON e.bank_clabe = b.to_clabe "
+        "ORDER BY v.rfc, e.emp_id").fetchall()
+
+    _hr("KICKBACK AUTHORISATION  (%d vendor/employee pair(s))" % len(pairs))
+    findings, false_accusations, authorised = [], [], []
+
+    for rfc, emp in pairs:
+        entity = "RFC:" + rfc
+        if entity in scheme_of:
+            truth = "SCHEME " + ",".join(scheme_of[entity])
+        elif entity in decoy_of:
+            truth = "DECOY " + decoy_of[entity]
+        else:
+            truth = "unlabelled (honest)"
+
+        txns = [r[0] for r in conn.execute(
+            "SELECT b.txn_id FROM bank_txns b "
+            "JOIN vendors v ON v.bank_clabe = b.from_clabe "
+            "JOIN employees e ON e.bank_clabe = b.to_clabe "
+            "WHERE v.rfc = ? AND e.emp_id = ? ORDER BY b.txn_id", (rfc, emp))]
+        if not txns:
+            continue
+        amount = sum(r[0] or 0 for r in conn.execute(
+            "SELECT amount FROM bank_txns WHERE txn_id IN (%s)"
+            % ",".join("?" * len(txns)), txns))
+        if amount <= 0:
+            continue
+        pos = [r[0] for r in conn.execute(
+            "SELECT po_id FROM purchase_orders WHERE vendor_rfc = ? ORDER BY po_id",
+            (rfc,))]
+
+        evidence = [
+            CaseEvidence(evidence_id="ev-v", statement="Vendor bank account.",
+                         direction="for", produced_by="probe",
+                         source_refs=[EvidenceRef(source_table="vendors",
+                                                  record_id=rfc,
+                                                  note="Vendor bank account.")]),
+            CaseEvidence(evidence_id="ev-e", statement="Employee bank account.",
+                         direction="for", produced_by="probe",
+                         source_refs=[EvidenceRef(source_table="employees",
+                                                  record_id=emp,
+                                                  note="Employee bank account.")]),
+        ]
+        for i, txn in enumerate(txns, start=1):
+            evidence.append(CaseEvidence(
+                evidence_id="ev-t%03d" % i, statement="Transfer.",
+                direction="for", produced_by="probe",
+                source_refs=[EvidenceRef(source_table="bank_txns", record_id=txn,
+                                         note="Vendor to employee transfer.")]))
+        for i, po in enumerate(pos, start=1):
+            evidence.append(CaseEvidence(
+                evidence_id="ev-p%03d" % i, statement="Purchase order.",
+                direction="for", produced_by="probe",
+                source_refs=[EvidenceRef(source_table="purchase_orders",
+                                         record_id=po,
+                                         note="Purchase order for that vendor.")]))
+
+        target = "probe-k-%s-H1" % rfc
+        case = CaseState(
+            case_id="probe-k-%s" % rfc, lead_id="probe-k-%s-L" % rfc,
+            status="ready_for_verification",
+            hypotheses=[Hypothesis(
+                hypothesis_id=target,
+                statement="Value moved from vendor %s to employee %s." % (rfc, emp),
+                scheme_type="kickback", status="supported",
+                supporting_evidence_ids=[e.evidence_id for e in evidence])],
+            evidence=evidence)
+        review = ReviewOrchestrationResult(
+            case_state=case, target_hypothesis_id=target,
+            rounds=[ReviewRound(
+                round_number=1, target_hypothesis_id=target,
+                challenger_review=ChallengerReview(
+                    target_hypothesis_id=target, outcome="survives",
+                    reasoning_summary="Deterministic probe.",
+                    survives_challenge=True),
+                method_critic_review=MethodCriticReview(
+                    target_hypothesis_id=target, outcome="clear",
+                    reasoning_summary="Deterministic probe."))],
+            review_rounds=1, ready_for_verification=True,
+            stop_reason="ready_for_verification")
+        pre = PreVerificationResult(
+            case_state=case, target_hypothesis_id=target,
+            ready_for_verification=True, stop_reason="ready_for_verification",
+            initial_investigation=InvestigationLoopResult(
+                case_state=case, decisions=[], iterations=0,
+                stop_reason="ready_for_verification"),
+            review_result=review)
+
+        post = run_postverification_pipeline(
+            preverification_result=pre, estate=estate, rule_registry=registry,
+            claimed_amount=round(amount, 2), requested_rule_id=rule_id)
+        outcome = post.gate_decision.outcome
+        blocking = [c.check_id for c in post.verification_report.checks
+                    if c.critical and c.status != "verified"]
+        print("  %-14s %-34s %-20s %s"
+              % (rfc, truth, outcome,
+                 ("blocked by " + ", ".join(blocking)) if blocking else ""))
+
+        if outcome != "authorize_probable":
+            continue
+        finding = build_finding(
+            case_state=post.preverification_result.case_state,
+            target_hypothesis_id=post.target_hypothesis_id,
+            gate_decision=post.gate_decision,
+            verification_report=post.verification_report,
+            rule_registry=registry, requested_rule_id=post.requested_rule_id,
+            claimed_amount=post.claimed_amount, estate=estate)
+        findings.append(finding)
+        if entity in scheme_of:
+            authorised.extend(scheme_of[entity])
+        else:
+            false_accusations.append((entity, truth, finding.peso_amount))
+    conn.close()
+    return {"findings": len(findings),
+            "authorised_schemes": sorted(set(authorised)),
+            "false_accusations": false_accusations}
+
+
 # ------------------------------------------------------------------- main ---
 
 def main(argv=None) -> int:
@@ -345,20 +496,37 @@ def main(argv=None) -> int:
     discovery = run_discovery(gt, scheme_of, decoy_of)
     authorisation = run_authorisation(gt, scheme_of, decoy_of, Path(args.out))
 
+    from src.core.estate import EstateRepository
+    from src.rules.default_rules import build_default_registry
+    estate = EstateRepository(ESTATE)
+    try:
+        kickback = run_kickback_authorisation(gt, scheme_of, decoy_of, estate,
+                                              build_default_registry())
+    finally:
+        estate.close()
+
     _hr("VERDICT")
-    print("  observations %d   leads %d   findings %d   %.2fs"
+    print("  observations %d   leads %d   findings %d (%d phantom, %d kickback)"
+          "   %.2fs"
           % (discovery["observations"], discovery["leads"],
-             authorisation["findings"], discovery["seconds"]))
-    print("  schemes authorised : %s"
-          % (", ".join(authorisation["authorised_schemes"]) or "none"))
+             authorisation["findings"] + kickback["findings"],
+             authorisation["findings"], kickback["findings"],
+             discovery["seconds"]))
+    all_authorised = sorted(set(authorisation["authorised_schemes"])
+                            | set(kickback["authorised_schemes"]))
+    print("  schemes authorised : %s" % (", ".join(all_authorised) or "none"))
     print("  submission         : %s" % authorisation["submission"])
 
     failures = []
-    for entity, truth, amount in authorisation["false_accusations"]:
+    for entity, truth, amount in (authorisation["false_accusations"]
+                                  + kickback["false_accusations"]):
         failures.append("FALSE ACCUSATION  %s  %s  MXN %s"
                         % (entity, truth, "{:,.2f}".format(amount)))
     for scheme_id in discovery["missing_expected"]:
         failures.append("DISCOVERY REGRESSION  %s no longer raises a lead"
+                        % scheme_id)
+    for scheme_id in sorted(EXPECTED_TO_AUTHORISE - set(all_authorised)):
+        failures.append("AUTHORISATION REGRESSION  %s no longer reaches a finding"
                         % scheme_id)
     for lead_id, exc_type, message in discovery["case_errors"]:
         failures.append("CASE BUILD ERROR  %s  %s: %s"
