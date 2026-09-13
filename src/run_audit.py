@@ -35,6 +35,7 @@ from typing import Any
 
 from src.core.estate import EstateRepository
 from src.investigation.claim_builder import build_phantom_vendor_claim
+from src.llm.env import load_env_file
 from src.investigation.estate_pipeline import (
     CasePipelineOutcome,
     EstatePreverificationRunResult,
@@ -481,10 +482,7 @@ def _build_llm_client(args: argparse.Namespace) -> tuple[Any, bool]:
         # Record the raw provider exchange, but keep the cost/usage accounting on
         # the instrumented client the caller reads metadata from.
         return (
-            InstrumentedLLMClient(
-                RecordingLLMClient(instrumented, recording_path=args.record),
-                pricing_fn=pricing_fn,
-            ),
+            RecordingLLMClient(instrumented, recording_path=args.record),
             False,
         )
 
@@ -549,6 +547,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="The real MXN cost of this run, if you are measuring it externally.",
     )
+    parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Archivo con GEMINI_API_KEY / GEMINI_MODEL. No pisa el entorno.",
+    )
     parser.add_argument("--mxn-per-1k-input", type=float, default=None)
     parser.add_argument("--mxn-per-1k-output", type=float, default=None)
     return parser
@@ -572,6 +575,10 @@ def main(
     # Total run duration, measured around everything: detectors, graph, optional
     # GNN, every LLM call and all deterministic verification. Not LLM latency.
     started = perf_counter()
+
+    # Cargar .env ANTES de construir cliente alguno: sin esto GEMINI_API_KEY
+    # queda indefinida y el cliente muere antes de abrir el estate.
+    loaded_env = load_env_file(args.env_file)
 
     if llm_client is None:
         llm_client, replay_mode = _build_llm_client(args)

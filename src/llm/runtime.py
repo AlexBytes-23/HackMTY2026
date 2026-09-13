@@ -40,6 +40,13 @@ def compute_request_key(
     return hashlib.sha256(raw).hexdigest()
 
 
+# gemini-2.5-flash devuelve 404 "no longer available". Verificados contra la API:
+# gemini-flash-lite-latest (~2.0 s) y gemini-flash-latest (~15.8 s). Este pipeline
+# hace tres llamadas por caso, asi que la LATENCIA -- no el costo -- decide si la
+# demo corre frente a los jueces.
+DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+
+
 class GeminiLLMClient:
     """
     Cliente mínimo para Google Gemini usando la biblioteca estándar de Python (urllib).
@@ -58,9 +65,7 @@ class GeminiLLMClient:
         if not key:
             raise ValueError("GEMINI_API_KEY must be set in environment or passed explicitly.")
 
-        mdl = model or os.getenv("GEMINI_MODEL")
-        if not mdl:
-            raise ValueError("GEMINI_MODEL must be set in environment or passed explicitly.")
+        mdl = model or os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
 
         self.api_key = key
         self.model = mdl
@@ -283,3 +288,26 @@ class RecordingLLMClient:
             f.flush()
 
         return response_text
+
+    # ------------------------------------------------------------------
+    # Contabilidad del cliente interno, visible a traves del grabador.
+    #
+    # Un grabador devuelve texto plano y no ve tokens. Envolverlo en OTRO
+    # InstrumentedLLMClient para medir costo daba None siempre, y run_audit
+    # abortaba DESPUES de haber facturado cada llamada: 14 llamadas cobradas
+    # y ningun submission.json escrito. La cifra si existia -- estaba en el
+    # cliente de adentro. Estas propiedades la dejan ver sin re-envolver.
+    # ------------------------------------------------------------------
+
+    @property
+    def llm_calls(self) -> int:
+        return int(getattr(self.inner_client, "llm_calls", 0))
+
+    @property
+    def total_configured_cost(self) -> float | None:
+        return getattr(self.inner_client, "total_configured_cost", None)
+
+    @property
+    def wall_clock_seconds(self) -> float:
+        return float(getattr(self.inner_client, "wall_clock_seconds", 0.0))
+

@@ -463,8 +463,13 @@ def test_gemini_client_missing_config_fails_loudly(monkeypatch):
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
         GeminiLLMClient(api_key=None, model="gemini-1.5-flash")
 
-    with pytest.raises(ValueError, match="GEMINI_MODEL"):
-        GeminiLLMClient(api_key="valid-key", model=None)
+    # El modelo YA NO es obligatorio: hay un default fijado y verificado
+    # contra la API, porque gemini-2.5-flash devuelve 404. La CLAVE sigue
+    # siendo obligatoria -- para esa no puede haber default.
+    from src.llm.runtime import DEFAULT_GEMINI_MODEL
+
+    client = GeminiLLMClient(api_key="k", model=None)
+    assert client.model == DEFAULT_GEMINI_MODEL
 
 
 def test_gemini_client_explicit_config_accepted():
