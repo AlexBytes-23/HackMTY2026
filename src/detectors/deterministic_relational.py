@@ -490,6 +490,200 @@ def detect_directed_bank_transfer_cycles(
 
     return observations
 
+
+def detect_unsupported_paid_vendor_invoices(
+    vendors: pd.DataFrame,
+    invoices: pd.DataFrame,
+    purchase_orders: pd.DataFrame,
+    contracts: pd.DataFrame,
+    bank_txns: pd.DataFrame,
+    minimum_unsupported: int = 3,
+) -> list[Observation]:
+    """Vendors paid repeatedly with no purchase order and no contract on file.
+
+    Why this detector exists
+    ------------------------
+    Until now the only route to a phantom-vendor lead was membership of the SAT
+    69-B list.  That makes a supplier invisible to us for exactly as long as the
+    tax authority has not published it -- which is most of the time, and always
+    at the beginning.  Documentary coverage is the signal an auditor actually
+    uses first: money left the company, and nothing in the books says anyone
+    ordered the goods or agreed the terms.
+
+    What it does NOT establish
+    --------------------------
+    Absence of a purchase order in the supplied estate is absence of a RECORD,
+    never proof that no order was placed.  Plenty of honest arrangements bill
+    without a PO, and a framework contract may waive one explicitly.  A vendor
+    with a contract on file is therefore never reported here, whatever its PO
+    coverage looks like.
+
+    This detector produces an Observation.  It cannot produce a finding: the
+    phantom_vendor verifier still requires the documentary link it always did.
+    """
+
+    required = {
+        "vendors": {"rfc"},
+        "invoices": {"uuid", "issuer_rfc", "total", "status"},
+        "purchase_orders": {"vendor_rfc", "amount"},
+        "contracts": {"vendor_rfc"},
+        "bank_txns": {"reference"},
+    }
+    frames = {
+        "vendors": vendors, "invoices": invoices,
+        "purchase_orders": purchase_orders, "contracts": contracts,
+        "bank_txns": bank_txns,
+    }
+    for name, columns in required.items():
+        if not columns.issubset(set(frames[name].columns)):
+            return []
+
+    vendor_rfcs = {
+        rfc for rfc in (_clean_text(v) for v in vendors["rfc"]) if rfc
+    }
+    if not vendor_rfcs:
+        return []
+
+    # A vendor with any contract row is out of scope. The contract is the
+    # document that explains the relationship, and we do not second-guess it.
+    covered_by_contract = {
+        rfc for rfc in (_clean_text(v) for v in contracts["vendor_rfc"]) if rfc
+    }
+
+    # Purchase-order amounts per vendor, so an invoice can be matched to an
+    # order by value. Amount is the only join the official schema offers.
+    po_amounts: dict[str, list[float]] = {}
+    for _, row in purchase_orders.iterrows():
+        rfc = _clean_text(row.get("vendor_rfc"))
+        if not rfc:
+            continue
+        try:
+            po_amounts.setdefault(rfc, []).append(round(float(row["amount"]), 2))
+        except (TypeError, ValueError):
+            continue
+
+    # Only invoices the company actually paid are of interest. An unpaid
+    # invoice is an open payable, not an exposure.
+    settled_prefixes = set()
+    for reference in bank_txns["reference"]:
+        text = _clean_text(reference) or ""
+        if text.startswith("Pago CFDI "):
+            settled_prefixes.add(text[len("Pago CFDI "):].strip())
+
+    observations: list[Observation] = []
+
+    for rfc in sorted(vendor_rfcs):
+        if rfc in covered_by_contract:
+            continue
+
+        issued = invoices[invoices["issuer_rfc"].map(_clean_text) == rfc]
+        if issued.empty:
+            continue
+
+        remaining = list(po_amounts.get(rfc, []))
+        unsupported: list[tuple[str, float]] = []
+        total_unsupported = 0.0
+
+        for _, row in issued.iterrows():
+            uuid_value = _clean_text(row.get("uuid"))
+            status = (_clean_text(row.get("status")) or "").lower()
+            if not uuid_value or status == "cancelado":
+                continue
+            if uuid_value[:8] not in settled_prefixes:
+                continue
+            try:
+                total = round(float(row["total"]), 2)
+            except (TypeError, ValueError):
+                continue
+
+            match = next(
+                (amount for amount in remaining
+                 if abs(amount - total) <= max(0.02 * total, 1.0)),
+                None,
+            )
+            if match is not None:
+                remaining.remove(match)
+                continue
+            unsupported.append((uuid_value, total))
+            total_unsupported += total
+
+        if len(unsupported) < minimum_unsupported:
+            continue
+
+        unsupported.sort()
+        evidence = [
+            EvidenceRef(
+                source_table="vendors",
+                record_id=rfc,
+                note="Vendor record for the issuer.",
+            )
+        ]
+        for uuid_value, total in unsupported:
+            evidence.append(
+                EvidenceRef(
+                    source_table="invoices",
+                    record_id=uuid_value,
+                    note=(
+                        "Settled invoice with no purchase order of a matching "
+                        "amount for this vendor in the supplied estate."
+                    ),
+                )
+            )
+
+        observations.append(
+            Observation(
+                observation_id=_observation_id("VENDOR-UNSUPPORTED", rfc),
+                detector_name="detect_unsupported_paid_vendor_invoices",
+                signal_type="paid_invoices_without_po_or_contract",
+                entities=[f"RFC:{rfc}"],
+                statement=(
+                    f"The supplied estate records {len(unsupported)} settled "
+                    f"invoice(s) from issuer RFC {rfc} with no purchase order of "
+                    "a matching amount, and no contract row for that vendor."
+                ),
+                evidence=evidence,
+                facts={
+                    "vendor_rfc": rfc,
+                    "unsupported_settled_invoice_count": len(unsupported),
+                    "unsupported_settled_total": round(total_unsupported, 2),
+                    "purchase_orders_on_file": len(po_amounts.get(rfc, [])),
+                    "contracts_on_file": 0,
+                },
+                limitations=[
+                    "Absence of a purchase order or contract in the supplied "
+                    "estate is absence of a record, not evidence that no order "
+                    "was placed or no contract exists.",
+                    "Invoices are matched to purchase orders by amount, because "
+                    "the official schema carries no direct key between them. A "
+                    "genuine order recorded at a different value will not match.",
+                    "This detector says nothing about whether the goods or "
+                    "services were delivered.",
+                ],
+                legitimate_alternatives=[
+                    "A framework agreement that explicitly waives the purchase "
+                    "order, held outside the supplied estate.",
+                    "Low-value or recurring spend that the company's own policy "
+                    "exempts from a purchase order.",
+                    "Purchase orders raised in a system that did not feed this "
+                    "extract.",
+                    "A supplier onboarded mid-period whose paperwork is filed "
+                    "under a different entity.",
+                ],
+                recommended_checks=[
+                    "get_vendor_contracts for this RFC, to see whether any "
+                    "agreement explains the cadence.",
+                    "get_vendor_purchase_orders for this RFC, and compare "
+                    "amounts and dates rather than counts alone.",
+                    "Compare this vendor's purchase-order coverage with the "
+                    "coverage of comparable vendors, so a company-wide practice "
+                    "is not mistaken for one supplier's irregularity.",
+                    "check_efos for this RFC.",
+                ],
+            )
+        )
+
+    return observations
+
 def run_deterministic_relational_detectors(
     estate: EstateRepository,
 ) -> list[Observation]:
@@ -499,6 +693,8 @@ def run_deterministic_relational_detectors(
     employees = estate.table_df("employees")
     bank_txns = estate.table_df("bank_txns")
     invoices = estate.table_df("invoices")
+    purchase_orders = estate.table_df("purchase_orders")
+    contracts = estate.table_df("contracts")
 
     observations: list[Observation] = []
     observations.extend(
@@ -518,6 +714,15 @@ def run_deterministic_relational_detectors(
             bank_txns=bank_txns,
             vendors=vendors,
             employees=employees,
+        )
+    )
+    observations.extend(
+        detect_unsupported_paid_vendor_invoices(
+            vendors=vendors,
+            invoices=invoices,
+            purchase_orders=purchase_orders,
+            contracts=contracts,
+            bank_txns=bank_txns,
         )
     )
     return observations

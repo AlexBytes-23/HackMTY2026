@@ -195,7 +195,19 @@ class FakeEstate:
                 ]
             ),
             "invoices": pd.DataFrame(
-                columns=["uuid", "issuer_rfc", "receiver_rfc", "issue_date", "total"]
+                columns=["uuid", "issuer_rfc", "receiver_rfc", "issue_date",
+                         "total", "status"]
+            ),
+            # The runner also reads these two for
+            # detect_unsupported_paid_vendor_invoices, which needs to know
+            # whether an order or a contract explains the spend.
+            "purchase_orders": pd.DataFrame(
+                columns=["po_id", "vendor_rfc", "date", "amount", "requester",
+                         "approver", "description"]
+            ),
+            "contracts": pd.DataFrame(
+                columns=["contract_id", "vendor_rfc", "start_date", "value",
+                         "scope_text"]
             ),
         }
 
@@ -287,3 +299,96 @@ def test_bank_cycle_invents_no_owner_for_an_unregistered_account():
     )[0]
 
     assert obs.entities == ["RFC:AAA010101AAA", "CLABE:A", "CLABE:B"]
+
+
+# ==========================================================================
+# PHANTOM VENDOR WITHOUT AN EFOS LISTING
+# ==========================================================================
+
+def _unsupported_frames(contract_rows=None, po_rows=None):
+    vendors = pd.DataFrame([{"rfc": "AAA010101AA1", "bank_clabe": "1" * 18}])
+    invoices = pd.DataFrame([
+        {"uuid": "u-%d" % i, "issuer_rfc": "AAA010101AA1",
+         "receiver_rfc": "EMP920101AB1", "issue_date": "2025-0%d-01" % (i + 1),
+         "total": 100000.0 + i, "status": "vigente"}
+        for i in range(4)
+    ])
+    bank = pd.DataFrame([
+        {"txn_id": "BNK-%d" % i, "date": "2025-0%d-10" % (i + 1),
+         "from_clabe": "9" * 18, "to_clabe": "1" * 18, "amount": 100000.0 + i,
+         "reference": "Pago CFDI %s" % ("u-%d" % i)[:8], "channel": "SPEI"}
+        for i in range(4)
+    ])
+    pos = pd.DataFrame(po_rows or [], columns=["po_id", "vendor_rfc", "date",
+                                               "amount", "requester",
+                                               "approver", "description"])
+    contracts = pd.DataFrame(contract_rows or [],
+                             columns=["contract_id", "vendor_rfc", "start_date",
+                                      "value", "scope_text"])
+    return vendors, invoices, pos, contracts, bank
+
+
+def test_settled_invoices_without_po_or_contract_are_reported():
+    """A phantom vendor is invisible until the tax authority publishes it,
+    unless documentary coverage is checked directly."""
+    from src.detectors.deterministic_relational import (
+        detect_unsupported_paid_vendor_invoices)
+    vendors, invoices, pos, contracts, bank = _unsupported_frames()
+    observations = detect_unsupported_paid_vendor_invoices(
+        vendors=vendors, invoices=invoices, purchase_orders=pos,
+        contracts=contracts, bank_txns=bank)
+    assert len(observations) == 1
+    obs = observations[0]
+    assert obs.entities == ["RFC:AAA010101AA1"]
+    assert obs.facts["unsupported_settled_invoice_count"] == 4
+    assert obs.limitations and obs.legitimate_alternatives and obs.recommended_checks
+
+
+def test_a_contract_on_file_clears_the_vendor_entirely():
+    """The contract is the document that explains the relationship. This is
+    what keeps the honest 'billed without a PO by agreement' case clear."""
+    from src.detectors.deterministic_relational import (
+        detect_unsupported_paid_vendor_invoices)
+    vendors, invoices, pos, contracts, bank = _unsupported_frames(
+        contract_rows=[{"contract_id": "CTR-1", "vendor_rfc": "AAA010101AA1",
+                        "start_date": "2024-01-01", "value": 400000.0,
+                        "scope_text": "Framework agreement; no PO required."}])
+    assert detect_unsupported_paid_vendor_invoices(
+        vendors=vendors, invoices=invoices, purchase_orders=pos,
+        contracts=contracts, bank_txns=bank) == []
+
+
+def test_matching_purchase_orders_clear_the_invoices():
+    from src.detectors.deterministic_relational import (
+        detect_unsupported_paid_vendor_invoices)
+    vendors, invoices, pos, contracts, bank = _unsupported_frames(
+        po_rows=[{"po_id": "PO-%d" % i, "vendor_rfc": "AAA010101AA1",
+                  "date": "2025-01-01", "amount": 100000.0 + i,
+                  "requester": "r", "approver": "a", "description": "d"}
+                 for i in range(4)])
+    assert detect_unsupported_paid_vendor_invoices(
+        vendors=vendors, invoices=invoices, purchase_orders=pos,
+        contracts=contracts, bank_txns=bank) == []
+
+
+def test_unpaid_and_cancelled_invoices_are_not_counted_as_exposure():
+    from src.detectors.deterministic_relational import (
+        detect_unsupported_paid_vendor_invoices)
+    vendors, invoices, pos, contracts, bank = _unsupported_frames()
+    invoices.loc[0, "status"] = "cancelado"
+    bank = bank.iloc[:2]          # only two invoices were ever settled
+    assert detect_unsupported_paid_vendor_invoices(
+        vendors=vendors, invoices=invoices, purchase_orders=pos,
+        contracts=contracts, bank_txns=bank) == []
+
+
+def test_it_states_that_a_missing_record_is_not_a_missing_order():
+    from src.detectors.deterministic_relational import (
+        detect_unsupported_paid_vendor_invoices)
+    vendors, invoices, pos, contracts, bank = _unsupported_frames()
+    obs = detect_unsupported_paid_vendor_invoices(
+        vendors=vendors, invoices=invoices, purchase_orders=pos,
+        contracts=contracts, bank_txns=bank)[0]
+    joined = " ".join(obs.limitations).lower()
+    assert "absence of a record" in joined
+    assert "supplied estate" in obs.statement
