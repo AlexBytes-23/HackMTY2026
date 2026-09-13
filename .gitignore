@@ -11,3 +11,7 @@ ui/credentials.json
 runs/
 # Superseded plaintext credential file. Never reintroduce.
 UsernamePassword.xlsx
+
+# Regenerable evaluation estates (28MB, byte-identical from the generator).
+dev_eval/tuning/
+dev_eval/heldout/
