@@ -53,7 +53,7 @@ def estate(tmp_path):
     )
     conn.execute(
         "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, approver) "
-        "VALUES ('PO-KICK', 'KIC010101AA1', '2025-04-20', '400000.00', '0007')"
+        "VALUES ('PO-KICK', 'KIC010101AA1', '2025-04-20', '400000.00', 'Persona Siete')"
     )
 
     # --- SEÑUELO D4: el proveedor ES el empleado. Misma cuenta, con contrato. ---
@@ -67,7 +67,7 @@ def estate(tmp_path):
     )
     conn.execute(
         "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, approver) "
-        "VALUES ('PO-PFA', 'PFA010101BB2', '2025-03-01', '90000.00', '0031')"
+        "VALUES ('PO-PFA', 'PFA010101BB2', '2025-03-01', '90000.00', 'Persona Treinta y Uno')"
     )
 
     # --- SEÑUELO D5: reembolso documentado; el empleado NO aprueba sus POs ---
@@ -86,7 +86,7 @@ def estate(tmp_path):
     )
     conn.execute(
         "INSERT INTO purchase_orders (po_id, vendor_rfc, date, amount, approver) "
-        "VALUES ('PO-REE', 'REE010101CC3', '2025-05-15', '50000.00', '0099')"
+        "VALUES ('PO-REE', 'REE010101CC3', '2025-05-15', '50000.00', 'Otra Persona')"
     )
 
     conn.commit()
@@ -243,3 +243,98 @@ def test_the_dispatcher_still_routes_phantom_vendor(estate):
     # Rechaza por falta de EFOS, no por no saber rutear.
     assert claim.scheme_type == "phantom_vendor"
     assert "efos_list" in claim.scope_rule
+
+# ==========================================================================
+# EL CAMPO approver GUARDA UN NOMBRE, NO UN emp_id
+# ==========================================================================
+# El ejemplo oficial trae approver = "D. Ejemplo". Comparar contra el emp_id no
+# coincide nunca sobre datos realistas, y el verificador quedaba muerto: siempre
+# `unresolved`. Mis primeros tests pasaban porque el fixture ponia el emp_id en
+# approver -- probaban mi suposicion, no el esquema.
+
+def test_the_approver_is_matched_by_name(estate):
+    """El fixture ya usa un nombre real; si esto falla el check esta muerto."""
+
+    result = assess_kickback_link(
+        estate,
+        _refs(("vendors", "KIC010101AA1"), ("employees", "0007"),
+              ("bank_txns", "BNK-KICK"), ("purchase_orders", "PO-KICK")),
+    )
+    assert result.status == "verified"
+
+
+def test_the_approver_is_also_matched_by_emp_id(tmp_path):
+    """Un estate que guarde el emp_id en approver debe seguir funcionando."""
+
+    db = tmp_path / "e.db"
+    conn = sqlite3.connect(db)
+    for table, cols in OFFICIAL_COLUMNS.items():
+        idc = ID_COLUMN[table]
+        rest = ",".join(f'"{c}"' for c in sorted(cols) if c != idc)
+        conn.execute(
+            f'CREATE TABLE {table} ("{idc}" TEXT PRIMARY KEY'
+            + (f",{rest}" if rest else "") + ")"
+        )
+    conn.execute(
+        "INSERT INTO vendors (rfc, bank_clabe) VALUES ('V1', '111111111111111111')"
+    )
+    conn.execute(
+        "INSERT INTO employees (emp_id, name, bank_clabe) "
+        "VALUES ('0007', 'Alguien', '222222222222222222')"
+    )
+    conn.execute(
+        "INSERT INTO bank_txns (txn_id, from_clabe, to_clabe, amount) "
+        "VALUES ('T1', '111111111111111111', '222222222222222222', '100.00')"
+    )
+    conn.execute(
+        "INSERT INTO purchase_orders (po_id, vendor_rfc, approver) "
+        "VALUES ('P1', 'V1', '0007')"
+    )
+    conn.commit(); conn.close()
+
+    with EstateRepository(db) as est:
+        result = assess_kickback_link(
+            est, _refs(("vendors", "V1"), ("employees", "0007"),
+                       ("bank_txns", "T1"), ("purchase_orders", "P1"))
+        )
+    assert result.status == "verified"
+
+
+def test_a_name_that_merely_ends_with_another_does_not_match(tmp_path):
+    """"Ana Trevino" es sufijo de "Mariana Trevino". Comparacion EXACTA."""
+
+    db = tmp_path / "e.db"
+    conn = sqlite3.connect(db)
+    for table, cols in OFFICIAL_COLUMNS.items():
+        idc = ID_COLUMN[table]
+        rest = ",".join(f'"{c}"' for c in sorted(cols) if c != idc)
+        conn.execute(
+            f'CREATE TABLE {table} ("{idc}" TEXT PRIMARY KEY'
+            + (f",{rest}" if rest else "") + ")"
+        )
+    conn.execute(
+        "INSERT INTO vendors (rfc, bank_clabe) VALUES ('V1', '111111111111111111')"
+    )
+    conn.execute(
+        "INSERT INTO employees (emp_id, name, bank_clabe) "
+        "VALUES ('0001', 'Ana Trevino', '222222222222222222')"
+    )
+    conn.execute(
+        "INSERT INTO bank_txns (txn_id, from_clabe, to_clabe, amount) "
+        "VALUES ('T1', '111111111111111111', '222222222222222222', '100.00')"
+    )
+    # Otra persona, cuyo nombre TERMINA con el de la empleada citada.
+    conn.execute(
+        "INSERT INTO purchase_orders (po_id, vendor_rfc, approver) "
+        "VALUES ('P1', 'V1', 'Mariana Trevino')"
+    )
+    conn.commit(); conn.close()
+
+    with EstateRepository(db) as est:
+        result = assess_kickback_link(
+            est, _refs(("vendors", "V1"), ("employees", "0001"),
+                       ("bank_txns", "T1"), ("purchase_orders", "P1"))
+        )
+
+    assert result.status == "unresolved"
+    assert "approved by that employee" in result.calculation

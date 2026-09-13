@@ -28,6 +28,7 @@ Three rules this file must never break:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from time import perf_counter
@@ -447,6 +448,94 @@ def _resolve_mxn_cost(
 # LLM CLIENT WIRING
 # ==========================================================================
 
+def check_recording_matches_code(recording_path: str | Path) -> dict[str, Any]:
+    """Dice si una grabacion puede reproducirse con el codigo ACTUAL.
+
+    Por que existe
+    --------------
+
+    El ``request_key`` de una grabacion es un hash sobre (provider, model,
+    system_prompt, user_prompt). Cualquier cambio en el texto de un prompt --
+    incluida una mejora -- invalida toda la grabacion, y el sintoma es brutal:
+    cada caso muere por separado con un ``ReplayMissError`` y la corrida entrega
+    cero hallazgos. Descubrir eso frente a un juez es el peor momento posible.
+
+    Cada entrada guarda ``system_prompt_hash``, asi que se puede comparar contra
+    el hash de los prompts que el codigo usa HOY sin volver a llamar al proveedor
+    y sin guardar los prompts en claro.
+
+    Devuelve un dict con ``ok``, los agentes cubiertos y los que faltan.
+    """
+
+    from src.agents.challenger import CHALLENGER_SYSTEM_PROMPT
+    from src.agents.method_critic import METHOD_CRITIC_PROMPT
+    from src.investigation.investigator import INVESTIGATOR_SYSTEM_PROMPT
+    from src.llm.runtime import compute_prompt_hash
+
+    expected = {
+        "investigator": compute_prompt_hash(INVESTIGATOR_SYSTEM_PROMPT),
+        "challenger": compute_prompt_hash(CHALLENGER_SYSTEM_PROMPT),
+        "method_critic": compute_prompt_hash(METHOD_CRITIC_PROMPT),
+    }
+
+    path = Path(recording_path)
+    if not path.is_file():
+        return {
+            "ok": False,
+            "entries": 0,
+            "reason": f"La grabacion no existe: {path}",
+            "matched": [],
+            "missing": sorted(expected),
+        }
+
+    seen: set[str] = set()
+    entries = 0
+    model = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        entries += 1
+        model = model or data.get("model")
+        h = data.get("system_prompt_hash")
+        if h:
+            seen.add(h)
+
+    matched = sorted(name for name, h in expected.items() if h in seen)
+    missing = sorted(name for name, h in expected.items() if h not in seen)
+
+    if not entries:
+        reason = "La grabacion esta vacia."
+    elif missing:
+        reason = (
+            "La grabacion se hizo con prompts DISTINTOS a los del codigo actual. "
+            "Sin cubrir: " + ", ".join(missing) + ". "
+            "Hay que volver a grabar con --record contra este mismo commit."
+        )
+    else:
+        reason = (
+            "La grabacion cubre los prompts actuales de los tres agentes. "
+            "OJO: esto NO garantiza que el replay funcione. El request_key "
+            "incluye tambien el user prompt, que lleva el CaseState completo, "
+            "asi que una grabacion hecha contra OTRA estate (u otro --max-cases) "
+            "fallara igual. Esta comprobacion descarta el desajuste de prompts, "
+            "que es la causa mas dificil de diagnosticar."
+        )
+
+    return {
+        "ok": bool(entries) and not missing,
+        "entries": entries,
+        "model": model,
+        "matched": matched,
+        "missing": missing,
+        "reason": reason,
+    }
+
+
 def _build_llm_client(args: argparse.Namespace) -> tuple[Any, bool]:
     """Construct the instrumented client. Returns ``(client, replay_mode)``."""
 
@@ -548,6 +637,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="The real MXN cost of this run, if you are measuring it externally.",
     )
     parser.add_argument(
+        "--check-replay",
+        action="store_true",
+        help=(
+            "Comprueba si la grabacion de --replay sirve con el codigo actual "
+            "y termina. Sin red y sin llamadas. Correr esto ANTES de la demo."
+        ),
+    )
+    parser.add_argument(
         "--env-file",
         default=".env",
         help="Archivo con GEMINI_API_KEY / GEMINI_MODEL. No pisa el entorno.",
@@ -574,6 +671,22 @@ def main(
 
     # Total run duration, measured around everything: detectors, graph, optional
     # GNN, every LLM call and all deterministic verification. Not LLM latency.
+    # Comprobacion previa: una grabacion obsoleta hace que TODOS los casos
+    # mueran con ReplayMissError. Mejor saberlo aqui que en el escenario.
+    if args.check_replay:
+        if not args.replay:
+            print("--check-replay requiere --replay <archivo.jsonl>")
+            return 2
+        report = check_recording_matches_code(args.replay)
+        print(f"grabacion   {args.replay}")
+        print(f"entradas    {report['entries']}")
+        print(f"modelo      {report.get('model')}")
+        print(f"cubre       {', '.join(report['matched']) or 'nada'}")
+        if report["missing"]:
+            print(f"SIN CUBRIR  {', '.join(report['missing'])}")
+        print(f"\n{'OK' if report['ok'] else 'OBSOLETA'}  {report['reason']}")
+        return 0 if report["ok"] else 1
+
     started = perf_counter()
 
     # Cargar .env ANTES de construir cliente alguno: sin esto GEMINI_API_KEY

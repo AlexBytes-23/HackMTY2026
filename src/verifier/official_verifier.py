@@ -431,6 +431,12 @@ def assess_kickback_link(
             vendors[clabe.strip()] = rfc.strip()
 
     employees: dict[str, str] = {}
+    # `purchase_orders.approver` guarda el NOMBRE de la persona, no su emp_id:
+    # el ejemplo oficial trae "D. Ejemplo". Comparar el approver contra un
+    # emp_id no puede coincidir NUNCA sobre datos realistas, asi que hay que
+    # llevar tambien el nombre. Se guardan los dos y se acepta cualquiera,
+    # para estates que usen una convencion u otra.
+    employee_aliases: dict[str, set[str]] = {}
     for ref in resolved_exhibits:
         if ref.source_table != "employees":
             continue
@@ -438,7 +444,13 @@ def assess_kickback_link(
         clabe = (rec or {}).get("bank_clabe")
         emp = (rec or {}).get("emp_id")
         if isinstance(clabe, str) and clabe.strip() and emp is not None and str(emp).strip():
-            employees[clabe.strip()] = str(emp).strip()
+            emp_id = str(emp).strip()
+            employees[clabe.strip()] = emp_id
+            aliases = {emp_id}
+            name = (rec or {}).get("name")
+            if isinstance(name, str) and name.strip():
+                aliases.add(name.strip())
+            employee_aliases[emp_id] = aliases
 
     if not vendors or not employees:
         return KickbackAssessment(
@@ -499,7 +511,10 @@ def assess_kickback_link(
             if str(rec.get("vendor_rfc", "")).strip() != rfc:
                 continue
             approver = str(rec.get("approver", "")).strip()
-            if approver and (approver == emp or approver.endswith(emp)):
+            # Coincidencia EXACTA contra el emp_id o el nombre. Nada de
+            # `endswith`: "Ana Trevino" es sufijo de "Mariana Trevino", y eso
+            # acusaria a la persona equivocada.
+            if approver and approver in employee_aliases.get(emp, {emp}):
                 confirmed.append((rfc, emp))
                 approvals.append(str(ref.record_id))
                 break
