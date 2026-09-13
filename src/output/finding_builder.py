@@ -9,6 +9,7 @@ from src.output.formatters import with_entity_prefix
 from src.verifier.official_verifier import (
     VerificationReport,
     assess_efos_status_and_timing,
+    assess_kickback_link,
 )
 from src.rules.rule_registry import RuleRegistry
 from src.output.models import (MoneyTrailStep, SubmissionFinding,
@@ -174,6 +175,11 @@ def build_finding(
     # RFCs qualify" is precisely what would let a verified check and an emitted
     # finding disagree about who is accused: an unfiltered intersection would name
     # a merely presumed vendor cited alongside a definitively listed one.
+    # Inicializado ANTES de la bifurcacion: toda rama de esquema debe poder
+    # construir el SubmissionFinding. Cuando esto vivia dentro de la rama
+    # phantom_vendor, kickback autorizaba y reventaba aqui.
+    money_trail: list[MoneyTrailStep] = []
+
     if scheme == "phantom_vendor":
 
         assessment = assess_efos_status_and_timing(
@@ -260,7 +266,6 @@ def build_finding(
         # Settlement legs are not added here because no bank_txns record is among
         # the authorised exhibits, and inventing an exhibit to draw a longer arrow
         # is exactly the failure this layer exists to prevent.
-        money_trail: list[MoneyTrailStep] = []
         dated_invoices: list[tuple[str, SubmissionExhibit, dict]] = []
         for exhibit in exhibits:
             if exhibit.source_table != "invoices":
@@ -291,7 +296,8 @@ def build_finding(
                 ]
 
     else:
-        # kickback: las entidades y el monto salen del MISMO flujo verificado,
+        # kickback: las entidades, el monto y la ruta del dinero salen del
+        # MISMO flujo verificado, no de una segunda deduccion.
         # no de una segunda deduccion. Si el claim no nombro a las partes, el
         # builder se niega en vez de inferirlas.
         kick = assess_kickback_link(estate, verification_report.resolved_exhibits)
@@ -306,6 +312,54 @@ def build_finding(
             + [with_entity_prefix("EMP:", emp) for emp in kick.employee_ids]
         )
 
+        # La ruta del dinero es el flujo que el check ya verifico. Cada paso
+        # cita un exhibit de este mismo finding; si no hay transferencia
+        # citada no se dibuja ninguna.
+        by_record = {(e.source_table, e.record_id): e for e in exhibits}
+        steps: list[tuple[str, MoneyTrailStep]] = []
+        for (table, record_id), exhibit in sorted(by_record.items()):
+            if table != "bank_txns":
+                continue
+            record = estate.get_record("bank_txns", record_id)
+            if not record:
+                continue
+            src_clabe = str(record.get("from_clabe") or "").strip()
+            dst_clabe = str(record.get("to_clabe") or "").strip()
+            if not src_clabe or not dst_clabe or src_clabe == dst_clabe:
+                continue
+            vendor = estate.find_vendor_by_clabe(src_clabe)
+            employee = estate.find_employee_by_clabe(dst_clabe)
+            if not vendor or not employee:
+                continue
+            amount_value = estate.get_record_amount("bank_txns", record_id)
+            if amount_value is None:
+                continue
+            date_value = str(record.get("date") or "").strip()
+            if not date_value:
+                continue
+            steps.append((
+                date_value,
+                MoneyTrailStep(
+                    **{
+                        "from": with_entity_prefix("RFC:", str(vendor["rfc"])),
+                        "to": with_entity_prefix("EMP:", str(employee["emp_id"])),
+                        "amount": float(amount_value),
+                        "date": date_value,
+                        "exhibit_id": exhibit.exhibit_id,
+                    }
+                ),
+            ))
+
+        # Un solo paso siempre es continuo. Con varios, sólo se conserva la
+        # corrida inicial que encadena, porque SubmissionFinding exige
+        # continuidad y no vamos a fabricarla.
+        steps.sort(key=lambda pair: pair[0])
+        ordered = [step for _, step in steps]
+        money_trail = ordered[:1]
+        for previous, nxt in zip(ordered, ordered[1:]):
+            if previous.to_entity != nxt.from_entity:
+                break
+            money_trail.append(nxt)
         narrative = (
             "The cited bank transfer(s) move MXN "
             + f"{amount:,.2f} from the vendor account to the personal account of "

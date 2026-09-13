@@ -338,3 +338,65 @@ def test_a_name_that_merely_ends_with_another_does_not_match(tmp_path):
 
     assert result.status == "unresolved"
     assert "approved by that employee" in result.calculation
+
+
+# ==========================================================================
+# END TO END: kickback -> SubmissionFinding
+# ==========================================================================
+# Este test existe por un fallo concreto. El verificador, el gate y el builder
+# se probaron cada uno contra la capa ANTERIOR, pero ninguno contra la
+# SIGUIENTE. Resultado: el gate autorizaba kickback y build_finding reventaba
+# con NameError, porque faltaba un import que ningun test recorria. Es el patron
+# que produce "autoriza y revienta", y la unica defensa es una prueba que
+# atraviese las tres capas de una vez.
+
+def test_kickback_reaches_a_submission_finding(estate):
+    from src.gates.evidence_gate import evaluate_gate
+    from src.output.finding_builder import build_finding
+    from src.rules.default_rules import build_default_registry, default_rule_id_for_scheme
+
+    case = _case([("vendors", "KIC010101AA1"), ("employees", "0007"),
+                  ("bank_txns", "BNK-KICK"), ("purchase_orders", "PO-KICK")])
+
+    claim = build_claim(case, "H-1", estate)
+    assert claim.claimed_amount is not None, claim.errors
+
+    report = OfficialVerifier().verify(case, "H-1", estate, claimed_amount=claim.claimed_amount)
+    registry = build_default_registry()
+    rule_id = default_rule_id_for_scheme("kickback")
+
+    decision = evaluate_gate(
+        case_state=case, target_hypothesis_id="H-1",
+        challenger_review=None, method_critic_review=None,
+        verification_report=report, rule_registry=registry,
+        requested_rule_id=rule_id,
+    )
+    # El gate exige revisiones adversariales; aqui sólo comprobamos que el
+    # check sustantivo de kickback NO sea el motivo del rechazo.
+    assert not any("KICKBACK" in f for f in decision.failed_requirements), decision.failed_requirements
+
+    # Y que el builder pueda construir el finding de verdad, no reventar.
+    decision.outcome = "authorize_probable"
+    decision.authorized_confidence = "probable"
+    finding = build_finding(
+        case_state=case, target_hypothesis_id="H-1",
+        gate_decision=decision, verification_report=report,
+        rule_registry=registry, requested_rule_id=rule_id,
+        claimed_amount=claim.claimed_amount, estate=estate,
+    )
+
+    assert finding.scheme_type == "kickback"
+    assert set(finding.entities) == {"RFC:KIC010101AA1", "EMP:0007"}
+    assert finding.peso_amount == pytest.approx(48000.0)
+    assert finding.confidence == "probable"
+    assert len(finding.exhibits) >= 3
+    assert len(finding.narrative.split()) <= 150
+    # No sobreafirma: debe NEGAR causalidad e intencion explicitamente.
+    lowered = finding.narrative.lower()
+    assert "do not establish that the payment caused the approval" in lowered
+    assert "nor any intent" in lowered
+
+    # La ruta del dinero sale de registros citados o esta vacia; nunca inventada.
+    for step in finding.money_trail:
+        assert step.exhibit_id in {e.exhibit_id for e in finding.exhibits}
+    assert "CLABE" not in finding.model_dump_json()
