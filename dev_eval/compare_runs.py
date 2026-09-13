@@ -20,6 +20,8 @@ from pathlib import Path
 # (key, label, "up" if higher is better else "down")
 METRICS = [
     ("schemes_with_finding", "important-case recall (findings)", "up"),
+    ("peso_claimed", "pesos claimed", "up"),
+    ("peso_actual", "pesos actually at stake (key)", "up"),
     ("schemes_signalled", "schemes that raised a lead", "up"),
     ("case_failures", "cases lost to program failure", "down"),
     ("unsupported_accusations", "unsupported accusations", "down"),
@@ -136,7 +138,10 @@ def main() -> int:
                 round(100 * after.get("scheme_recall", 0), 1),
                 after.get("decoys_total"), after.get("decoys_accused"),
                 round(100 * after.get("false_accusation_rate", 0), 1),
-                "", "", "yes", after.get("llm_calls"),
+                round(after.get("peso_claimed", 0), 2),
+                round(after.get("peso_actual", 0), 2),
+                "yes" if after.get("peso_reconciles", True) else "no",
+                after.get("llm_calls"),
                 round(after.get("mxn_cost", 0), 4),
                 round(after.get("wall_clock_seconds", 0), 1)]))
         Path(args.csv).write_text("\n".join(lines) + "\n", encoding="utf-8")
