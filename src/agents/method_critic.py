@@ -224,8 +224,59 @@ Do NOT duplicate the Verifier (do not recalculate final monetary facts).
 
 If you refer to specific evidence items or prior actions, you MUST include their exact IDs/step numbers in `referenced_evidence_ids` and `referenced_action_steps`.
 
-You must return a valid JSON object matching the requested schema.
+=== RETURN VALID JSON, AND FILL EVERY NESTED FIELD ===
+
+A response that fails to parse is neither a finding nor a reasoned decline. It is a
+hole in the case file, and it is the worst outcome you can produce -- worse than
+being wrong, because nobody can see what you thought. Live runs have died on a
+nested required field being omitted and on the STRING "null" being sent where a
+real JSON null was meant.
+
+The exact output shape is supplied as `required_output_example` in the context
+block below. Copy its structure.
+
+Omit a LIST entirely if it is empty. Never omit a field inside an object you did
+include. Remember the validator will REJECT "clear" if any material list is
+non-empty, "needs_more_work" without a proposed action, and "cannot_support"
+without a material blocker -- so choose the outcome that matches what you actually
+found rather than trying to fit findings to a chosen outcome.
 """
+
+
+# El ejemplo de salida vive aqui y NO dentro de METHOD_CRITIC_PROMPT: ese texto se
+# antepone al user prompt, y hay stubs y arneses externos que extraen el contexto
+# buscando la primera "{". Un ejemplo con llaves dentro del prompt les rompe el
+# parseo. Invariante: METHOD_CRITIC_PROMPT no contiene "{".
+_REQUIRED_OUTPUT_EXAMPLE = {
+    "target_hypothesis_id": "<the id you were asked to review, verbatim>",
+    "outcome": "one of: clear | needs_more_work | cannot_support",
+    "problematic_assumptions": ["..."],
+    "evidence_dependency_risks": ["..."],
+    "confirmation_bias_risks": ["..."],
+    "selection_or_window_bias": ["..."],
+    "rule_misuse": ["..."],
+    "source_completeness_risks": ["..."],
+    "entity_resolution_risks": ["..."],
+    "missing_alternative_methods": ["..."],
+    "material_blockers": ["..."],
+    "non_material_notes": ["..."],
+    "proposed_actions": [
+        {
+            "action_name": "<exact name from available_actions>",
+            "arguments": {"<required arg>": "<value>"},
+            "reason": "...",
+            "question_resolved": "...",
+        }
+    ],
+    "reasoning_summary": "...",
+    "referenced_evidence_ids": ["EV-..."],
+    "referenced_action_steps": [1],
+    "_rules": [
+        "Omit a LIST entirely if it is empty.",
+        "Never omit a field inside an object you did include.",
+        "Use a real JSON null, never the string 'null'.",
+    ],
+}
 
 
 def _safe_serialize(items: list[Any]) -> list[Any]:
@@ -265,6 +316,7 @@ def build_method_critic_prompt(
         "rule_context": rule_context_str,
         "available_actions": safe_actions,
         "case_state": case_state.model_dump(),
+        "required_output_example": _REQUIRED_OUTPUT_EXAMPLE,
         "schema": MethodCriticReview.model_json_schema()
     }
     

@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from src.core.models import (
     CaseState,
@@ -35,6 +35,7 @@ from src.core.models import (
 from src.agents.case_analysis import (
     build_case_briefing,
     collect_declared_alternatives,
+    normalize_optional_enum,
 )
 from src.investigation.investigator import LLMClient
 from src.llm.json_text import strip_code_fences
@@ -89,6 +90,10 @@ class AlternativeHypothesis(BaseModel):
     scheme_type: SchemeType | None = None
     reason: str
     supporting_evidence_ids: list[str] = Field(default_factory=list)
+
+    _normalize_scheme_type = field_validator(
+        "scheme_type", mode="before"
+    )(normalize_optional_enum)
 
 
 class ChallengerReview(BaseModel):
@@ -366,7 +371,50 @@ considered and why the available evidence does not support it. A hypothesis nobo
 tried to break is weaker than one that was attacked and held, and the case file has
 to show the attack. Write it so a non-technical reader can follow it.
 
-19. RETURN ONLY VALID JSON.
+19. RETURN ONLY VALID JSON, AND FILL EVERY NESTED FIELD.
+
+Measured failures in live runs, both of which killed the whole case:
+
+* `missing_counterevidence[0].why_it_matters` was simply absent. Every nested
+  object below is required in full. A question without `why_it_matters` is not a
+  smaller answer, it is an unusable one -- the whole point is why it would change
+  the interpretation.
+* `scheme_type` was the STRING "null". Use a real JSON null, not the word.
+
+A response that fails to parse is neither a finding nor a reasoned decline. It is a
+hole in the case file, and it is the worst outcome you can produce -- worse than
+being wrong, because nobody can see what you thought.
+
+This is the exact shape. Copy it:
+
+{
+  "target_hypothesis_id": "<the id you were asked to review, verbatim>",
+  "outcome": "survives" | "needs_more_evidence" | "legitimate_alternative" | "alternative_hypothesis",
+  "strongest_legitimate_alternative": "<text, or null>",
+  "unsupported_claims": [
+    {"claim": "...", "why_unsupported": "...", "what_would_support_it": "..."}
+  ],
+  "missing_counterevidence": [
+    {"question": "...", "why_it_matters": "..."}
+  ],
+  "contradictions": [
+    {"statement": "...", "evidence_ids": ["EV-..."], "why_it_conflicts": "..."}
+  ],
+  "proposed_actions": [
+    {"action_name": "<exact name from available_actions>",
+     "arguments": {"<required arg>": "<value>"},
+     "reason": "...",
+     "question_resolved": "..."}
+  ],
+  "alternative_hypotheses": [
+    {"statement": "...", "scheme_type": null, "reason": "...",
+     "supporting_evidence_ids": ["EV-..."]}
+  ],
+  "reasoning_summary": "..."
+}
+
+Omit a LIST entirely if it is empty. Never omit a field inside an object you did
+include. `scheme_type` must be JSON null or one of the five official scheme names.
 
 Your output must conform exactly to the supplied ChallengerReview schema.
 Do not place prose outside the JSON.

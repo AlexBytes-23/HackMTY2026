@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 SchemeType = Literal[
@@ -90,6 +90,19 @@ class Hypothesis(BaseModel):
     statement: str
 
     scheme_type: SchemeType | None = None
+
+    # Un LLM que quiere decir "sin scheme_type" escribe la CADENA "null" con
+    # frecuencia. Es un artefacto de serializacion, no una decision: mataba el
+    # caso entero con un error de ejecucion, que no es ni hallazgo ni
+    # declinacion razonada. El enum sigue rechazando cualquier otro valor.
+    @field_validator("scheme_type", mode="before")
+    @classmethod
+    def _normalize_null_like_scheme_type(cls, value):
+        if isinstance(value, str) and value.strip().lower() in {
+            "null", "none", "nil", "n/a", "na", "",
+        }:
+            return None
+        return value
 
     status: Literal[
         "open",

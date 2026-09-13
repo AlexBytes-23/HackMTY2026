@@ -574,3 +574,113 @@ def test_neither_critic_is_told_to_decide_guilt():
     for prompt in (CHALLENGER_SYSTEM_PROMPT, METHOD_CRITIC_PROMPT):
         lowered = prompt.lower()
         assert "not to decide guilt" in lowered or "never decide guilt" in lowered
+
+
+# ==========================================================================
+# ROBUSTEZ DE FORMA — fallos medidos en corridas en vivo
+# ==========================================================================
+# Un caso que revienta no es ni un hallazgo ni una declinacion razonada: es un
+# hueco en el expediente. En el baseline medido, 2 de 3 casos morian asi.
+
+@pytest.mark.parametrize("null_like", ["null", "none", "NULL", "N/A", "", "  "])
+def test_the_string_null_does_not_kill_the_case(null_like: str):
+    """El modelo escribe la CADENA "null" para decir "sin esquema"."""
+
+    from src.core.models import Hypothesis
+
+    assert Hypothesis(
+        hypothesis_id="H", statement="s", scheme_type=null_like
+    ).scheme_type is None
+
+    review = ChallengerReview(
+        target_hypothesis_id=TARGET,
+        outcome="alternative_hypothesis",
+        reasoning_summary="otra explicacion",
+        alternative_hypotheses=[
+            {"statement": "s", "reason": "r", "scheme_type": null_like}
+        ],
+    )
+    assert review.alternative_hypotheses[0].scheme_type is None
+
+
+def test_coercion_does_not_weaken_the_enum():
+    """Normalizar un artefacto de serializacion no es aceptar cualquier valor."""
+
+    from src.core.models import Hypothesis
+    from src.agents.challenger import AlternativeHypothesis
+
+    with pytest.raises(ValueError):
+        Hypothesis(hypothesis_id="H", statement="s", scheme_type="tax_evasion")
+
+    with pytest.raises(ValueError):
+        AlternativeHypothesis(statement="s", reason="r", scheme_type="bogus")
+
+    # Y un esquema real sigue pasando intacto.
+    assert (
+        Hypothesis(
+            hypothesis_id="H", statement="s", scheme_type="kickback"
+        ).scheme_type
+        == "kickback"
+    )
+
+
+def test_a_nested_required_field_still_fails_loudly():
+    """No se rellena con un default: preguntar sin el porque es inservible."""
+
+    with pytest.raises(ValueError):
+        ChallengerReview(
+            target_hypothesis_id=TARGET,
+            outcome="needs_more_evidence",
+            reasoning_summary="falta",
+            missing_counterevidence=[{"question": "¿Existe contrato?"}],
+            proposed_actions=[
+                ProposedAction(
+                    action_name="get_vendor_contracts",
+                    arguments={"vendor_rfc": "X"},
+                    reason="r",
+                    question_resolved="q",
+                )
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "field", ["why_it_matters", "question"]
+)
+def test_both_prompts_show_the_exact_output_shape(field: str):
+    """El prompt debe ENSEÑAR la forma, no solo exigirla."""
+
+    # El Challenger lleva el ejemplo en su SYSTEM prompt, que viaja aparte.
+    assert field in CHALLENGER_SYSTEM_PROMPT
+    assert '"target_hypothesis_id"' in CHALLENGER_SYSTEM_PROMPT
+
+    # El Method Critic lo lleva en el CONTEXTO, no en el texto del prompt: ese
+    # texto se antepone al user prompt y hay arneses externos que extraen el
+    # contexto buscando la primera "{".
+    assert "{" not in METHOD_CRITIC_PROMPT
+    payload = _method_payload(_case())
+    assert payload["required_output_example"]["target_hypothesis_id"]
+
+    for prompt in (CHALLENGER_SYSTEM_PROMPT, METHOD_CRITIC_PROMPT):
+        assert "hole in the case file" in prompt
+
+
+
+def test_method_critic_prompt_text_never_contains_a_brace():
+    """Invariante que protege a los arneses externos.
+
+    METHOD_CRITIC_PROMPT se antepone al user prompt. Varios stubs (incluidos los
+    de dev_eval/ y ui/, que esta sesion no controla) extraen el contexto buscando
+    la primera "{". Un ejemplo JSON dentro del texto del prompt les rompe el
+    parseo y mata el caso entero con un JSONDecodeError. Esto ya paso una vez.
+    """
+
+    assert "{" not in METHOD_CRITIC_PROMPT
+    assert "}" not in METHOD_CRITIC_PROMPT
+
+    prompt = build_method_critic_prompt(
+        _case(), TARGET, list_available_actions(), None
+    )
+    head, _, context = prompt.partition("=== CONTEXT ===")
+    assert "{" not in head
+    assert json.loads(context)["required_output_example"]

@@ -35,6 +35,25 @@ from typing import Any
 from src.core.models import CaseState, Observation
 
 
+# Un LLM que quiere decir "sin scheme_type" escribe la CADENA "null" con una
+# frecuencia alta, y a veces "none" o "". Eso es un artefacto de serializacion,
+# no una decision del modelo: ninguna de esas cadenas es un scheme_type valido y
+# todas significan lo mismo que JSON null. Normalizarlas NO debilita el contrato
+# -- el enum sigue rechazando cualquier valor que no sea uno de los cinco
+# esquemas oficiales. Dejarlo sin normalizar hacia que el caso completo muriera
+# con un error de ejecucion, que no es ni un hallazgo ni una declinacion
+# razonada: es un hueco en el expediente.
+_NULL_LIKE_STRINGS = {"null", "none", "nil", "n/a", "na", ""}
+
+
+def normalize_optional_enum(value: Any) -> Any:
+    """Convierte las cadenas que un LLM usa para decir "nada" en ``None`` real."""
+
+    if isinstance(value, str) and value.strip().lower() in _NULL_LIKE_STRINGS:
+        return None
+    return value
+
+
 # Señales que los detectores emiten hoy. Se nombran explicitamente para que el
 # analisis por señal falle de forma visible si un detector cambia su signal_type,
 # en lugar de dejar de analizar en silencio.
