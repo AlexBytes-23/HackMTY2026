@@ -34,7 +34,7 @@ from time import perf_counter
 from typing import Any
 
 from src.core.estate import EstateRepository
-from src.investigation.claim_builder import build_phantom_vendor_claim
+from src.investigation.claim_builder import build_claim
 from src.llm.env import load_env_file
 from src.investigation.estate_pipeline import (
     CasePipelineOutcome,
@@ -302,7 +302,7 @@ def _authorize_case(
     )
     scheme_type = hypothesis.scheme_type if hypothesis else None
 
-    if scheme_type != "phantom_vendor":
+    if scheme_type not in ("phantom_vendor", "kickback"):
         return (
             None,
             (
@@ -315,7 +315,7 @@ def _authorize_case(
 
     # The amount is produced by a fixed scope rule, before verification, and is
     # never adjusted afterwards to make reconciliation succeed.
-    claim = build_phantom_vendor_claim(
+    claim = build_claim(
         preverification.case_state,
         target_hypothesis_id,
         estate,
@@ -326,7 +326,7 @@ def _authorize_case(
             None,
             (
                 f"{_reviewed_evidence_summary(outcome)}; no monetary claim could be "
-                "stated under the phantom_vendor scope rule: "
+                "stated under the scheme scope rule: "
                 + " ".join(claim.errors)
             ),
             False,

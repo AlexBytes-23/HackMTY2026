@@ -139,9 +139,9 @@ def test_gate_inconclusive_refuses(registry, mock_estate):
         build_finding(**inputs)
 
 def test_wrong_scheme_refuses(registry, mock_estate):
-    inputs = make_inputs(mock_estate, scheme_type="kickback")
+    inputs = make_inputs(mock_estate, scheme_type="round_tripping")
     inputs["rule_registry"] = registry
-    with pytest.raises(ValueError, match="only supports phantom_vendor"):
+    with pytest.raises(ValueError, match="supports only"):
         build_finding(**inputs)
 
 def test_missing_phantom_link_refuses(registry, mock_estate):
@@ -195,7 +195,7 @@ def test_missing_rule_refuses(registry, mock_estate):
         build_finding(**inputs)
 
 def test_wrong_rule_applicability_refuses(registry, mock_estate):
-    registry.register(RuleDefinition(rule_id="BAD", title="bad", source="s", source_reference="r", applies_to=["kickback"]))
+    registry.register(RuleDefinition(rule_id="BAD", title="bad", source="s", source_reference="r", applies_to=["round_tripping"]))
     inputs = make_inputs(mock_estate, rule_id="BAD")
     inputs["rule_registry"] = registry
     with pytest.raises(ValueError, match="does not apply to phantom_vendor"):

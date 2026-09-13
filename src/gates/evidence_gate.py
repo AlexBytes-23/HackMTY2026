@@ -120,6 +120,7 @@ def evaluate_gate(
 
         has_verified_peso = False
         has_verified_phantom = False
+        has_verified_kickback = False
 
         for check in verification_report.checks:
             if check.critical:
@@ -132,6 +133,8 @@ def evaluate_gate(
                         has_verified_peso = True
                     elif check.check_id == "PHANTOM-EFOS-INVOICE-LINK":
                         has_verified_phantom = True
+                    elif check.check_id == "KICKBACK-VENDOR-EMPLOYEE-LINK":
+                        has_verified_kickback = True
 
         if not has_verified_peso:
             decision.failed_requirements.append("VerificationReport lacks a critical verified PESO-RECONCILIATION check")
@@ -140,6 +143,9 @@ def evaluate_gate(
         if hypothesis.scheme_type == "phantom_vendor":
             if not has_verified_phantom:
                 decision.failed_requirements.append("VerificationReport lacks a critical verified PHANTOM-EFOS-INVOICE-LINK check")
+        elif hypothesis.scheme_type == "kickback":
+            if not has_verified_kickback:
+                decision.failed_requirements.append("VerificationReport lacks a critical verified KICKBACK-VENDOR-EMPLOYEE-LINK check")
         elif hypothesis.scheme_type:
             decision.failed_requirements.append(f"No supported deterministic substantive verifier exists for scheme_type {hypothesis.scheme_type}")
 

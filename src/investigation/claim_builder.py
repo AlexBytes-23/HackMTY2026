@@ -226,3 +226,154 @@ def build_phantom_vendor_claim(
     )
 
     return claim
+
+
+KICKBACK_SCOPE_RULE = (
+    "sum(bank_txns.amount) over the cited transfers that run from a cited vendor "
+    "account to a cited employee account between DISTINCT accounts"
+)
+
+
+def build_kickback_claim(
+    case_state: CaseState,
+    target_hypothesis_id: str,
+    estate: EstateRepository,
+) -> AmountClaim:
+    """El monto es lo que se movio del proveedor al empleado, nada mas.
+
+    NO es el valor de las facturas del proveedor: eso incluiria operaciones que
+    pueden ser legitimas. El perjuicio atribuible al mecanismo es el flujo entre
+    las dos partes, y sale de una tabla sola, asi que reconcilia por tabla.
+    """
+
+    claim = AmountClaim(
+        target_hypothesis_id=target_hypothesis_id,
+        scope_rule=KICKBACK_SCOPE_RULE,
+        source_table="bank_txns",
+    )
+
+    hypothesis = next(
+        (h for h in case_state.hypotheses if h.hypothesis_id == target_hypothesis_id),
+        None,
+    )
+    if hypothesis is None:
+        claim.errors.append(
+            f"Hypothesis {target_hypothesis_id!r} does not exist in the CaseState."
+        )
+        return claim
+
+    claim.scheme_type = hypothesis.scheme_type
+    if hypothesis.scheme_type != "kickback":
+        claim.errors.append(
+            "This scope rule only applies to kickback. Requested scheme_type: "
+            f"{hypothesis.scheme_type}."
+        )
+        return claim
+
+    refs = _cited_refs(case_state, target_hypothesis_id)
+
+    vendor_clabes: dict[str, str] = {}
+    employee_clabes: dict[str, str] = {}
+    for ref in refs:
+        if ref.source_table == "vendors":
+            rec = estate.get_record("vendors", str(ref.record_id))
+            clabe, rfc = (rec or {}).get("bank_clabe"), (rec or {}).get("rfc")
+            if isinstance(clabe, str) and clabe.strip() and isinstance(rfc, str):
+                vendor_clabes[clabe.strip()] = rfc.strip()
+        elif ref.source_table == "employees":
+            rec = estate.get_record("employees", str(ref.record_id))
+            clabe, emp = (rec or {}).get("bank_clabe"), (rec or {}).get("emp_id")
+            if isinstance(clabe, str) and clabe.strip() and emp is not None:
+                employee_clabes[clabe.strip()] = str(emp).strip()
+
+    if not vendor_clabes or not employee_clabes:
+        claim.errors.append(
+            "No cited records yield both a vendor and an employee bank_clabe, so the "
+            "kickback scope is undefined."
+        )
+        return claim
+
+    in_scope: list[tuple[str, float]] = []
+    entities: set[str] = set()
+    for ref in refs:
+        if ref.source_table != "bank_txns":
+            continue
+        record_id = str(ref.record_id)
+        rec = estate.get_record("bank_txns", record_id)
+        if not rec:
+            continue
+        src, dst = rec.get("from_clabe"), rec.get("to_clabe")
+        if not (isinstance(src, str) and isinstance(dst, str)):
+            continue
+        src, dst = src.strip(), dst.strip()
+        if src == dst or src not in vendor_clabes or dst not in employee_clabes:
+            continue
+        amount = estate.get_record_amount("bank_txns", record_id)
+        if amount is None:
+            claim.errors.append(
+                f"Cited transfer {record_id} has no usable amount, so the claim "
+                "cannot be stated."
+            )
+            return claim
+        in_scope.append((record_id, float(amount)))
+        entities.add("RFC:" + vendor_clabes[src])
+        entities.add("EMP:" + employee_clabes[dst])
+
+    if not in_scope:
+        claim.errors.append(
+            "No cited transfer runs between distinct cited vendor and employee "
+            "accounts, so there is no kickback amount to claim."
+        )
+        return claim
+
+    in_scope.sort()
+    total = math.fsum(a for _, a in in_scope)
+    if not math.isfinite(total) or total <= 0:
+        claim.errors.append(
+            f"The computed scope total is not a usable positive amount: {total!r}."
+        )
+        return claim
+
+    claim.contributing_record_ids = [r for r, _ in in_scope]
+    claim.matched_entities = sorted(entities)
+    claim.claimed_amount = total
+    claim.formula = (
+        "sum(bank_txns.amount) over ["
+        + ", ".join(f"{r}={a:.2f}" for r, a in in_scope)
+        + f"] = {total:.2f}"
+    )
+    return claim
+
+
+def build_claim(
+    case_state: CaseState,
+    target_hypothesis_id: str,
+    estate: EstateRepository,
+) -> AmountClaim:
+    """Punto unico de entrada: rutea por scheme_type.
+
+    Un esquema sin regla de alcance no recibe monto inventado: recibe una
+    negativa explicita con su razon.
+    """
+
+    hypothesis = next(
+        (h for h in case_state.hypotheses if h.hypothesis_id == target_hypothesis_id),
+        None,
+    )
+    scheme = hypothesis.scheme_type if hypothesis else None
+
+    if scheme == "phantom_vendor":
+        return build_phantom_vendor_claim(case_state, target_hypothesis_id, estate)
+    if scheme == "kickback":
+        return build_kickback_claim(case_state, target_hypothesis_id, estate)
+
+    claim = AmountClaim(
+        target_hypothesis_id=target_hypothesis_id,
+        scheme_type=scheme,
+        scope_rule="none defined",
+    )
+    claim.errors.append(
+        f"No scope rule is defined for scheme_type {scheme}, so no amount can be "
+        "stated. The case remains a lead."
+    )
+    return claim

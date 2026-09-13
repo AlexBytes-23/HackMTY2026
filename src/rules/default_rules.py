@@ -95,7 +95,62 @@ RULE_CFF_69B = RuleDefinition(
 )
 
 
-DEFAULT_RULES: tuple[RuleDefinition, ...] = (RULE_CFF_69B,)
+RULE_SOD_PROCUREMENT = RuleDefinition(
+    rule_id="SOD-PROC-01",
+    title="Segregacion de funciones en compras",
+    source="Control interno de la empresa",
+    source_reference="Politica de compras",
+    applies_to=["kickback"],
+    supports=[
+        (
+            "Quien autoriza una orden de compra no puede tener un interes economico "
+            "en el proveedor autorizado. Un flujo de fondos desde la cuenta del "
+            "proveedor hacia la cuenta personal de quien aprueba sus ordenes de "
+            "compra es la forma documental de ese conflicto."
+        ),
+    ],
+    does_not_prove=[
+        (
+            "No prueba que el pago haya sido la causa de la autorizacion; establece "
+            "una concurrencia documental, no una relacion causal."
+        ),
+        (
+            "No prueba intencion, dolo ni responsabilidad penal de ninguna persona "
+            "fisica."
+        ),
+        (
+            "No prueba que los bienes o servicios facturados no se hayan prestado."
+        ),
+        (
+            "No es una norma legal: es una politica de control interno de la propia "
+            "empresa y se cita como tal."
+        ),
+    ],
+    requirements=[
+        (
+            "Una transferencia citada debe correr desde la cuenta del proveedor hacia "
+            "la del empleado, entre cuentas DISTINTAS."
+        ),
+        (
+            "Ese mismo empleado debe figurar como approver en al menos una orden de "
+            "compra citada de ese proveedor."
+        ),
+    ],
+    exceptions=[
+        (
+            "Un proveedor persona fisica con actividad empresarial que ES el empleado "
+            "comparte cuenta legitimamente; en ese caso no hay dos partes y no hay "
+            "transferencia entre cuentas distintas."
+        ),
+        (
+            "Un reembolso de gastos documentado del proveedor al empleado no "
+            "establece el conflicto si ese empleado no aprueba sus ordenes de compra."
+        ),
+    ],
+)
+
+
+DEFAULT_RULES: tuple[RuleDefinition, ...] = (RULE_CFF_69B, RULE_SOD_PROCUREMENT)
 
 
 def build_default_registry() -> RuleRegistry:

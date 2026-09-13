@@ -387,6 +387,152 @@ class VerificationReport(BaseModel):
     unresolved_critical_checks: list[str] = Field(default_factory=list)
     internal_errors: list[str] = Field(default_factory=list)
 
+# ==========================================================================
+# KICKBACK
+# ==========================================================================
+
+# Un CLABE compartido NO basta, y esto no es cautela abstracta: en la estate
+# adversarial hay un proveedor que comparte los 18 digitos con un empleado
+# porque el proveedor ES el empleado -- persona fisica con actividad
+# empresarial, con contrato y ordenes de compra aprobadas. Un verificador
+# ingenuo basado en igualdad de CLABE acusa a un contratista legitimo.
+#
+# El mecanismo exige DOS cosas, ambas desde registros CITADOS:
+#   1. una transferencia de la cuenta del proveedor a la del empleado, entre
+#      cuentas DISTINTAS -- si es la misma cuenta no hubo flujo entre dos
+#      partes, hubo una sola parte;
+#   2. que ese mismo empleado sea `approver` de al menos una orden de compra de
+#      ese proveedor -- el conflicto de interes, que es lo que separa un pago
+#      entre partes de un reembolso de gastos documentado.
+KICKBACK_CHECK_ID = "KICKBACK-VENDOR-EMPLOYEE-LINK"
+
+
+class KickbackAssessment(BaseModel):
+    status: VerificationStatus
+    calculation: str
+    vendor_rfcs: list[str] = Field(default_factory=list)
+    employee_ids: list[str] = Field(default_factory=list)
+
+
+def assess_kickback_link(
+    estate: EstateRepository,
+    resolved_exhibits: list[EvidenceRef],
+) -> KickbackAssessment:
+    """Verifica el mecanismo de kickback SOLO desde registros citados."""
+
+    vendors: dict[str, str] = {}
+    for ref in resolved_exhibits:
+        if ref.source_table != "vendors":
+            continue
+        rec = estate.get_record("vendors", str(ref.record_id))
+        clabe = (rec or {}).get("bank_clabe")
+        rfc = (rec or {}).get("rfc")
+        if isinstance(clabe, str) and clabe.strip() and isinstance(rfc, str) and rfc.strip():
+            vendors[clabe.strip()] = rfc.strip()
+
+    employees: dict[str, str] = {}
+    for ref in resolved_exhibits:
+        if ref.source_table != "employees":
+            continue
+        rec = estate.get_record("employees", str(ref.record_id))
+        clabe = (rec or {}).get("bank_clabe")
+        emp = (rec or {}).get("emp_id")
+        if isinstance(clabe, str) and clabe.strip() and emp is not None and str(emp).strip():
+            employees[clabe.strip()] = str(emp).strip()
+
+    if not vendors or not employees:
+        return KickbackAssessment(
+            status="unresolved",
+            calculation=(
+                "No cited records yield both a vendor bank_clabe and an employee "
+                "bank_clabe. No record establishing this was found in the supplied "
+                "estate."
+            ),
+        )
+
+    # 1. Transferencia entre cuentas DISTINTAS.
+    pairs: set[tuple[str, str]] = set()
+    transfers: list[str] = []
+    for ref in resolved_exhibits:
+        if ref.source_table != "bank_txns":
+            continue
+        rec = estate.get_record("bank_txns", str(ref.record_id))
+        if not rec:
+            continue
+        src, dst = rec.get("from_clabe"), rec.get("to_clabe")
+        if not (isinstance(src, str) and isinstance(dst, str)):
+            continue
+        src, dst = src.strip(), dst.strip()
+        if src == dst:
+            continue
+        if src in vendors and dst in employees:
+            pairs.add((vendors[src], employees[dst]))
+            transfers.append(str(ref.record_id))
+
+    if not pairs:
+        shared = sorted(set(vendors) & set(employees))
+        if shared:
+            detail = (
+                "A vendor and an employee share bank_clabe "
+                + ", ".join(shared)
+                + ", but no cited bank_txns record moves value between two DISTINCT "
+                "accounts. A shared account is consistent with the vendor and the "
+                "employee being the same person."
+            )
+        else:
+            detail = (
+                "No cited bank_txns record runs from a cited vendor account to a "
+                "cited employee account."
+            )
+        return KickbackAssessment(status="unresolved", calculation=detail)
+
+    # 2. Conflicto de interes: ese empleado aprueba una PO de ese proveedor.
+    confirmed: list[tuple[str, str]] = []
+    approvals: list[str] = []
+    for rfc, emp in sorted(pairs):
+        for ref in resolved_exhibits:
+            if ref.source_table != "purchase_orders":
+                continue
+            rec = estate.get_record("purchase_orders", str(ref.record_id))
+            if not rec:
+                continue
+            if str(rec.get("vendor_rfc", "")).strip() != rfc:
+                continue
+            approver = str(rec.get("approver", "")).strip()
+            if approver and (approver == emp or approver.endswith(emp)):
+                confirmed.append((rfc, emp))
+                approvals.append(str(ref.record_id))
+                break
+
+    if not confirmed:
+        return KickbackAssessment(
+            status="unresolved",
+            calculation=(
+                "Transfer(s) "
+                + ", ".join(sorted(transfers))
+                + " run from a cited vendor account to a cited employee account, but "
+                "no cited purchase_order for that vendor is approved by that employee. "
+                "Without the approval link the transfer is consistent with an ordinary "
+                "documented payment."
+            ),
+        )
+
+    return KickbackAssessment(
+        status="verified",
+        calculation=(
+            "Transfer(s) "
+            + ", ".join(sorted(transfers))
+            + " move value between DISTINCT accounts from vendor to employee, and "
+            "purchase_order(s) "
+            + ", ".join(sorted(approvals))
+            + " for that vendor are approved by that same employee: "
+            + "; ".join(r + " -> " + e for r, e in sorted(confirmed))
+        ),
+        vendor_rfcs=sorted({r for r, _ in confirmed}),
+        employee_ids=sorted({e for _, e in confirmed}),
+    )
+
+
 class OfficialVerifier:
     def verify(
         self,
@@ -460,6 +606,19 @@ class OfficialVerifier:
                     f"matched RFC carries status '{EFOS_STATUS_DEFINITIVE}' with a "
                     "usable publication_date; and every matched RFC has at least "
                     "one cited invoice issued on or after that publication_date."
+                ),
+                status=assessment.status,
+                calculation=assessment.calculation,
+                critical=True
+            ))
+        elif hypothesis.scheme_type == "kickback":
+            assessment = assess_kickback_link(estate, report.resolved_exhibits)
+            report.checks.append(VerificationCheck(
+                check_id=KICKBACK_CHECK_ID,
+                statement=(
+                    "A cited bank transfer moves value between DISTINCT vendor "
+                    "and employee accounts, and that employee approves a cited "
+                    "purchase order for that vendor."
                 ),
                 status=assessment.status,
                 calculation=assessment.calculation,

@@ -89,7 +89,7 @@ def test_verifier_valid_exhibit(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -119,7 +119,7 @@ def test_verifier_missing_claimed_amount(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -146,7 +146,7 @@ def test_verifier_nonexistent_exhibit(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -175,7 +175,7 @@ def test_verifier_duplicate_exhibit(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -203,7 +203,7 @@ def test_verifier_peso_reconciliation_fails(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -229,7 +229,7 @@ def test_verifier_integer_ledger_id_coercion(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -254,7 +254,7 @@ def test_verifier_cross_table_not_summed(mock_estate):
         case_id="c1",
         lead_id="l1",
         hypotheses=[
-            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="kickback")
+            Hypothesis(hypothesis_id="h1", statement="", supporting_evidence_ids=["ev1"], scheme_type="round_tripping")
         ],
         evidence=[
             CaseEvidence(
@@ -457,7 +457,7 @@ def test_pv_invoice_issuer_rfc_empty(mock_estate):
     assert check.status == "unresolved"
 
 def test_other_schemes_unresolved(mock_estate):
-    for scheme in ["kickback", "round_tripping", "threshold_splitting", "revenue_inflation"]:
+    for scheme in ["round_tripping", "round_tripping", "threshold_splitting", "revenue_inflation"]:
         state = CaseState(
             case_id="c1",
             lead_id="l1",

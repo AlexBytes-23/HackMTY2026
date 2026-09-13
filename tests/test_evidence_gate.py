@@ -19,7 +19,7 @@ def registry():
         title="Kickback Rule",
         source="Test",
         source_reference="1",
-        applies_to=["kickback"]
+        applies_to=["round_tripping"]
     ))
     reg.register(RuleDefinition(
         rule_id="WRONG_SCHEME_RULE",
@@ -223,7 +223,7 @@ def test_authorize_proven_impossible(registry):
 
 def test_wrong_scheme_applicability_blocks(registry):
     decision = evaluate_gate(
-        case_state=make_base_case("kickback"),
+        case_state=make_base_case("round_tripping"),
         target_hypothesis_id="h1",
         challenger_review=DummyReview("survives"),
         method_critic_review=DummyReview("clear"),
@@ -262,7 +262,7 @@ def test_empty_applies_to_blocks(registry):
 
 def test_gate_derives_scheme_type_from_hypothesis(registry):
     decision = evaluate_gate(
-        case_state=make_base_case("kickback"),
+        case_state=make_base_case("round_tripping"),
         target_hypothesis_id="h1",
         challenger_review=DummyReview("survives"),
         method_critic_review=DummyReview("clear"),
@@ -392,10 +392,10 @@ def test_actual_unresolved_critical_verification_blocks_despite_summary(registry
 
 # --- NEW SUBSTANTIVE/CRITICAL TESTS ---
 
-def test_kickback_handcrafted_otherwise_valid_report_blocks(registry):
+def test_unsupported_scheme_handcrafted_otherwise_valid_report_blocks(registry):
     verif = make_base_verification()
     decision = evaluate_gate(
-        case_state=make_base_case("kickback"),
+        case_state=make_base_case("round_tripping"),
         target_hypothesis_id="h1",
         challenger_review=DummyReview("survives"),
         method_critic_review=DummyReview("clear"),
