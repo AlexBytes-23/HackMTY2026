@@ -1,0 +1,47 @@
+{
+  "_about": "Subset of the SAT CFDI 4.0 catalogues (Anexo 20) used to populate invoices.uso_cfdi / forma_pago / metodo_pago. DEV/EVAL ONLY - src/ must never import this.",
+  "source_organization": "Servicio de Administracion Tributaria (SAT)",
+  "primary_document": "Anexo 20 - Guia de llenado de los CFDI (CFDI 4.0) and the catCFDI catalogue workbook",
+  "source_urls": [
+    "https://www.sat.gob.mx/aplicacion/75169/servicio-de-facturacion-cfdi-version-4.0-(vigente-a-partir-del-1-de-enero-de-2022)",
+    "https://www.sat.gob.mx/cs/Satellite?blobcol=urldata&blobkey=id&blobtable=MungoBlobs&blobwhere=1461173536663&ssbinary=true"
+  ],
+  "accessed": "2026-09-13",
+  "retrieval_limitation": "Automated fetch of www.sat.gob.mx/consultas/13615 returned HTTP 403 and omawww.sat.gob.mx refused the connection on 2026-09-13. The SAT-hosted Anexo 20 PDF downloaded but its text layer is emitted glyph-by-glyph and could not be parsed within the time budget. Codes G01, G03, I01 and P01 and their descriptions were confirmed from SAT-hosted Anexo 20 documents surfaced by search; the remaining entries below are reproduced from the published catalogue definitions and are used as FORMAT REALISM only. They are not asserted to be a current, complete snapshot of catCFDI.",
+  "c_UsoCFDI": {
+    "G01": "Adquisicion de mercancias",
+    "G02": "Devoluciones, descuentos o bonificaciones",
+    "G03": "Gastos en general",
+    "I01": "Construcciones",
+    "I02": "Mobiliario y equipo de oficina por inversiones",
+    "I03": "Equipo de transporte",
+    "I04": "Equipo de computo y accesorios",
+    "I06": "Comunicaciones telefonicas",
+    "I08": "Otra maquinaria y equipo",
+    "P01": "Por definir",
+    "S01": "Sin efectos fiscales",
+    "CP01": "Pagos"
+  },
+  "c_FormaPago": {
+    "01": "Efectivo",
+    "02": "Cheque nominativo",
+    "03": "Transferencia electronica de fondos",
+    "04": "Tarjeta de credito",
+    "28": "Tarjeta de debito",
+    "99": "Por definir"
+  },
+  "c_MetodoPago": {
+    "PUE": "Pago en una sola exhibicion",
+    "PPD": "Pago en parcialidades o diferido"
+  },
+  "consistency_rules_applied_in_the_generator": [
+    "metodo_pago = PPD implies forma_pago = 99 ('Por definir'), per the Anexo 20 filling rule. This is a VALID combination and the estate contains many of them on purpose, so that a detector treating forma_pago 99 as suspicious produces a false positive.",
+    "metodo_pago = PUE implies a concrete forma_pago (01, 02, 03, 04, 28).",
+    "invoices.status uses the estate enum vigente | cancelado (estate_schema.sql), not the SAT cancellation-status vocabulary."
+  ],
+  "iva_rates_used": {
+    "0.16": "General VAT rate.",
+    "0.08": "Reduced rate applied to taxpayers under the northern border region fiscal stimulus. Used for a small number of vendors domiciled in border municipalities so that total = subtotal * 1.16 is NOT a universally safe check.",
+    "0.00": "Exempt / zero-rated supplies (for example certain foodstuffs and medical services). Used for a small number of vendors for the same reason."
+  }
+}

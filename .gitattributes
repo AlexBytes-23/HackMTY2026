@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Estate databases and bundles are byte-compared for determinism.
+# Never let LF normalization touch them.
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.zip binary
+*.xlsx binary

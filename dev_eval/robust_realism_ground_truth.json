@@ -1,0 +1,369 @@
+{
+  "seed": 20260913,
+  "company_rfc": "IMX210415K72",
+  "schemes": [
+    {
+      "scheme_id": "S1_phantom_vendor_1",
+      "type": "phantom_vendor",
+      "entities": [
+        "RFC:BER2407128JB"
+      ],
+      "supporting_invoices": [
+        "cbfdabf0-3455-5d5c-904d-9e95d1cc5d58",
+        "f6ce7be9-7de7-588a-9ce0-af79d3153d92",
+        "7ac4979d-cef4-518e-9865-68e225d2be68",
+        "4e5c9473-057f-5c59-a1d4-5208516e118b",
+        "702c949b-419f-5418-af51-0698d525cd67",
+        "17b14842-dc67-534d-91e4-acc5553bb949",
+        "d8b57cb1-3dec-5439-911b-e809d06c5cea"
+      ],
+      "supporting_txns": [
+        "BNK-000740",
+        "BNK-000773",
+        "BNK-000823",
+        "BNK-000873",
+        "BNK-000929",
+        "BNK-000996",
+        "BNK-001047"
+      ],
+      "peso_amount": 2795600.0,
+      "difficulty": "easy"
+    },
+    {
+      "scheme_id": "S2_kickback_1",
+      "type": "kickback",
+      "entities": [
+        "RFC:ARD190326XMY",
+        "EMP:0003"
+      ],
+      "supporting_invoices": [
+        "4dc19754-f0a5-5346-ab5d-135bbc7a8742",
+        "d8ba91a1-f25d-5f7c-898d-269c90db93de",
+        "6127bd5e-11fa-5f1e-8466-765603f1c5b2",
+        "1df637b5-759d-5686-880f-e7b1be579753",
+        "59af9cb6-a9a6-50d5-ba79-6b53b1c2224b"
+      ],
+      "supporting_txns": [
+        "BNK-000166",
+        "BNK-000365",
+        "BNK-000618",
+        "BNK-000793",
+        "BNK-001022"
+      ],
+      "peso_amount": 534238.0,
+      "difficulty": "medium"
+    },
+    {
+      "scheme_id": "S3_round_tripping_1",
+      "type": "round_tripping",
+      "entities": [
+        "RFC:IMX210415K72",
+        "RFC:QUI2211089GU",
+        "RFC:KAB230530JJI"
+      ],
+      "supporting_invoices": [
+        "a517bb72-c93f-5f41-a9c4-2c3dc3fa19c2",
+        "7c6f29fb-fcaf-58bb-b297-2b308f086450",
+        "be4f0246-658a-5309-905a-1f9625917c71"
+      ],
+      "supporting_txns": [
+        "BNK-000786",
+        "BNK-000965",
+        "BNK-001136"
+      ],
+      "peso_amount": 6830000.0,
+      "difficulty": "medium"
+    },
+    {
+      "scheme_id": "S5_revenue_inflation_1",
+      "type": "revenue_inflation",
+      "entities": [
+        "RFC:IMX210415K72",
+        "RFC:KAB230530JJI",
+        "RFC:MEL230914D06"
+      ],
+      "supporting_invoices": [
+        "b35612c0-5042-54d2-8537-44729bfa5b88",
+        "7ef7997b-10e2-558c-9f71-dbb7bfa10533",
+        "c8e46e23-a88d-5958-b786-02c1cb1fd936",
+        "66ca4f25-d3a2-507c-b5cc-d94d4ae200b8",
+        "5f403d45-7245-5bf0-88e5-ea30c06cc4ee",
+        "6d43c71e-0fed-5d55-8bde-f3d6c2fc23fe",
+        "f8936ad4-3f23-5f72-baec-d11adf3a8ca0",
+        "2eb17fd7-5d57-563a-9aca-2e4aa0119058",
+        "ac83468e-95a3-5373-95c5-3388999a1fa2"
+      ],
+      "supporting_txns": [],
+      "peso_amount": 13953060.0,
+      "difficulty": "hard"
+    },
+    {
+      "scheme_id": "S4_threshold_splitting_1",
+      "type": "threshold_splitting",
+      "entities": [
+        "RFC:OND2106030B1",
+        "EMP:0009"
+      ],
+      "supporting_invoices": [
+        "d49e37f4-eb27-57de-8aa8-5dd83dd892ed",
+        "22ac069a-0d37-5bcd-ae29-ae9be15b95ce",
+        "0f1b4f24-0961-59f2-b990-f0f5399c5ca0",
+        "20fb24ad-9677-54e1-b36b-b85577134bf5",
+        "08bea9b6-b234-51e3-8579-50d39c04241b",
+        "fbdf5c7a-3dff-5732-8251-c7fc769104c5"
+      ],
+      "supporting_txns": [
+        "BNK-000679",
+        "BNK-000669",
+        "BNK-000680",
+        "BNK-000687",
+        "BNK-000698",
+        "BNK-000699"
+      ],
+      "peso_amount": 586830.0,
+      "difficulty": "medium"
+    }
+  ],
+  "decoys": [
+    {
+      "entity": "RFC:NUV250804HWW",
+      "signal": "new_vendor_repeating_invoices_no_po",
+      "why_innocent": "Contract for this vendor states a fixed monthly fee of 106,400.00 MXN and waives the purchase order; every invoice matches the fee exactly.",
+      "invoices": [
+        "5381fdda-fa4a-5e24-b7b6-effcde458365",
+        "94f1f72e-b30d-5403-965f-819e864246e1",
+        "b78aca11-464b-5b86-824b-5aefa471182d",
+        "bcba0824-597d-5c01-b2a5-f6e570ee7ffe",
+        "839cb276-2acb-5fdc-a4ba-e477b312cad5"
+      ]
+    },
+    {
+      "entity": "RFC:BER1903047A5",
+      "signal": "efos_legal_name_similarity",
+      "why_innocent": "Legal name is one letter from the EFOS-listed Corporativo Berlanda, but the RFC is different and does not appear in efos_list. Contract, purchase orders and payments span 24 months.",
+      "invoices": [
+        "aa96697e-6a58-5c81-ad3c-82f1ed03021e",
+        "34eee283-d134-5b1d-9fae-7ead498b7500",
+        "f4f74aa4-5851-58e3-8980-c6e5d4078734",
+        "95b75f8d-f0c8-5859-9110-82bffb667b76",
+        "d7414b93-c7dc-57b4-a492-735ee4680cd9",
+        "0b1f22fc-ba3d-5215-ba75-83727db8caab",
+        "5780a982-887b-53fa-98d4-c44f2ce21998",
+        "0313be52-7874-5b4e-8161-9888836dec70",
+        "b7c33751-03d6-59b7-aa60-0a20abf1b9e7",
+        "e6a16d32-30f4-5253-9777-ebaf8862bc8c",
+        "604ed84c-ff34-5813-ac31-26143bcb796a"
+      ]
+    },
+    {
+      "entity": "RFC:ZAN200417TML",
+      "signal": "efos_list_membership",
+      "why_innocent": "Present in efos_list but issues no invoice to the company and appears in no other table. An EFOS listing with no transaction is not an exposure.",
+      "invoices": []
+    },
+    {
+      "entity": "RFC:TRVC84021936Z",
+      "signal": "vendor_employee_shared_clabe",
+      "why_innocent": "The vendor IS the employee: a persona fisica con actividad empresarial registered as a training supplier, with a contract, purchase orders and invoices. One person, one bank account, two roles.",
+      "invoices": [
+        "86e71ef5-773b-51ce-8d63-549ca3bbc2d8",
+        "f71d3a39-ada8-50b3-81cb-876050383330",
+        "468d2fad-bad1-587c-8ee3-b8ea338bd14d",
+        "c6de3810-e5a7-57b9-9142-e9f2f2409177",
+        "53f660e2-1bdc-5ed7-8d2f-d78a90c6b781",
+        "68837589-c4e2-5d64-9991-249a405e7551",
+        "ff4ee1c8-1638-5715-a08e-6b6457469b7f"
+      ]
+    },
+    {
+      "entity": "RFC:VIA171002P3W",
+      "signal": "vendor_to_employee_transfer",
+      "why_innocent": "Single 8,432.50 MXN transfer described as reimbursement of documented expenses, two weeks after the employee's trip and unrelated in amount to any purchase order. The vendor is a travel agency.",
+      "invoices": [
+        "93e82806-1642-50f5-a778-74528d3cf493",
+        "cbf5743a-0486-5856-a879-4fd2a806510d"
+      ]
+    },
+    {
+      "entity": "RFC:ORB160721LW3",
+      "signal": "directed_bank_transfer_cycle",
+      "why_innocent": "The three legs are 5 and 10 months apart, differ by a factor of sixteen in amount, and each carries its own business purpose. Same topology as a round trip, none of the same money.",
+      "invoices": []
+    },
+    {
+      "entity": "RFC:SAL1801300VW",
+      "signal": "recurring_amount_just_below_approval_threshold",
+      "why_innocent": "Twelve identical 89,500.00 MXN invoices one month apart, matching a contract that fixes exactly that monthly retainer for twelve months. Regular, not clustered.",
+      "invoices": [
+        "1501d10c-efd7-50bd-8fd5-6ad30f024f87",
+        "41e75f3f-c101-54ff-9a07-29c2f9f30ecb",
+        "93be1fde-6a1f-5c2f-85e3-d5eb18fb6728",
+        "83a0a91a-d8f4-5174-85ee-4ee9ae7690ef",
+        "658a30bf-47d8-53f1-b66c-349046e54504",
+        "5806584e-6e21-548c-ad87-002007c0bb79",
+        "58f6c983-8641-5c00-9575-0c56b7eb5351",
+        "e52f7a18-9dee-53ed-a0ac-2a3495178ad5",
+        "42a495bd-85d4-5cb5-a8d0-ee8967abf8bd",
+        "4120efa5-ded3-5b7e-8fdc-5f0b2c8590eb",
+        "1ee5aa8c-1e8a-53eb-be46-5a6c4871757b",
+        "a394e783-6a2f-5217-b38a-da9afd31c158"
+      ]
+    },
+    {
+      "entity": "RFC:GRI130612H28",
+      "signal": "period_end_invoice_concentration",
+      "why_innocent": "The November-December spike repeats identically in 2024 and 2025 and matches a packaging contract that states seasonal peaks. The base rate makes this normal.",
+      "invoices": [
+        "347c1fd3-184e-5e6c-aa72-4e1fc7c4fca8",
+        "48505675-5660-5c3c-ac02-b6290f295d3c",
+        "6951f180-93d6-55c4-948a-d258bc1c2969",
+        "4cbc85df-4598-587c-a441-4bcfb4f298bd",
+        "ad4f2716-2cc8-5a71-8bb9-c0f0630d639e",
+        "28ee5399-4c07-55e6-ba0a-84f1a5b60e15",
+        "88f93bc9-5f4a-5d44-a5b8-473190eadbfe",
+        "363237c5-33cf-5700-a117-b1bb7f84a271",
+        "74b38b5a-7fb5-5c84-b304-3f1aa56e5409",
+        "a4c34f1a-65ab-5dc9-bc0a-c1fc646c64bd",
+        "00ae2589-d7e8-50e8-b46f-871ce88975ca",
+        "43074546-0f4a-5cd3-b982-47c9016e0138",
+        "40b2b7ef-1df9-5e31-b712-86946e678eef",
+        "83e10e06-cc22-55b1-88b9-909741f31c12",
+        "bf97861e-8b06-559e-b7ed-98738c572158",
+        "502801a8-64c7-5cf7-8164-61a40e380b9a",
+        "cfee96f1-c3ee-581a-8e53-780a6411330c",
+        "65d50e56-0984-5ab7-afc4-70069990b781",
+        "be32480d-2f5c-59fc-b635-ac534a870466",
+        "5573d128-8d24-5da2-a722-95b279da7235",
+        "68869d5c-2fd7-5cb0-af91-6eac888a2263",
+        "a98bbb91-d42c-5d10-b974-ff7bf47212c7",
+        "279f330b-7587-580a-88d6-b7640402c592",
+        "9c54005d-31a8-5f74-b6c7-df497bc36434",
+        "86be1b89-6208-5569-b459-ed26d1048cd6",
+        "96434efd-ccd0-5cd3-bbc7-1c04260ebe7e",
+        "91570762-f65b-5185-9e72-2806772fe9bb",
+        "a02e9938-543f-5a0a-a67e-0455eb44eb42",
+        "af53dda4-33d4-5453-aef8-0074c7543fc2",
+        "5c1f6b64-dc2b-56df-8c8f-feaec9340162",
+        "a374c37f-45a3-5cd0-ae25-bb2def0690f0",
+        "06849126-03e2-5a52-968f-7613c0efcee2",
+        "7316284d-e359-58fa-b4c5-6a5c81639154",
+        "d9d65653-686f-5827-9785-5de539a3dbe9",
+        "aeae901e-8461-5c00-869c-05a8d880a5bd",
+        "0a061344-dcb2-57ce-abd8-f688d403b428",
+        "3c2f1476-47b6-5015-8476-5078b5a24cb3",
+        "a7228041-ca78-5976-97f0-3d2f20d6d8f8",
+        "323b9ab8-79c5-5665-b693-2da7249b7fe5",
+        "760d60c3-adc9-5a3c-a5ce-4add00946c2a",
+        "a03c42be-be9c-5f94-8bb8-670a5694a348",
+        "569b71fa-5b06-5967-aa88-76f22c40f444"
+      ]
+    },
+    {
+      "entity": "RFC:CIT2002265JC",
+      "signal": "duplicate_payment_candidate",
+      "why_innocent": "Same vendor, same date, same 78,300.00 MXN amount, but two distinct purchase orders, two distinct sites and two distinct cost centres. Two services, not one paid twice.",
+      "invoices": [
+        "ca6b53bc-bc18-502a-8182-904a2ca583fd",
+        "bd634722-5495-5e72-a842-446a00fdcf86"
+      ]
+    },
+    {
+      "entity": "RFC:HAL140819YW8",
+      "signal": "invoice_without_settlement",
+      "why_innocent": "The 2,528,800.00 MXN invoice carries status 'cancelado' and was reissued two weeks later; the reissued invoice was paid once. Counting the cancelled one doubles the exposure.",
+      "invoices": [
+        "81a04d49-8b21-5382-a025-8a0c7f5a0ad3",
+        "f69cc17e-7ce7-5a37-96b9-c70e53419164"
+      ]
+    },
+    {
+      "entity": "RFC:IND1104084H9",
+      "signal": "outlier_transaction_amount",
+      "why_innocent": "4,872,000.00 MXN single payment backed by a contract signed four months earlier, a director-approved purchase order and a capitalised ledger entry. Large is not odd.",
+      "invoices": [
+        "425f23b8-27f6-5d19-b354-0f398fb53c65"
+      ]
+    },
+    {
+      "entity": "RFC:LAN1401257I6",
+      "signal": "shared_vendor_address",
+      "why_innocent": "Five vendors share the same address because it is a leased office tower. Three of the five, including this one, have contracts, purchase orders and a multi-year payment history. Address is not control.",
+      "invoices": []
+    },
+    {
+      "entity": "RFC:PAL160915XMG",
+      "signal": "no_contract_on_file",
+      "why_innocent": "Nine invoices, each with its own approved purchase order and payment, but no row in contracts. The contracts table is incomplete for spot purchases. Absence of a record in the estate is not absence of a contract.",
+      "invoices": [
+        "619a0723-0a80-59de-866f-b35b1e4ad7cd",
+        "b4aa616f-88b5-549a-bbd4-d6a0f91d86ab",
+        "837164c1-d55c-5c2e-ba33-ee73f9b28a8d",
+        "d445c2d8-2222-597f-83ae-851b0e3245c6",
+        "ba4e8b07-57d1-50aa-a816-1c48062f1a1b",
+        "c1862bde-9c2f-5f82-bc8f-f5071b537b30",
+        "4124de84-218e-50f5-82e7-c7be5778fe4c",
+        "e4d042de-d7ea-577f-a0af-75a5b8db6226",
+        "e9b0dd57-5b8a-54ea-b325-a0b4dc41a37c"
+      ]
+    },
+    {
+      "entity": "RFC:XEN19120372S",
+      "signal": "unusual_cfdi_coding",
+      "why_innocent": "forma_pago 99 with metodo_pago PPD is the coding the SAT filling guide requires for deferred payment, and the contract sets 60-day terms. The partial settlements are the instalments, not short payments.",
+      "invoices": [
+        "ecbb31b8-0cae-5f76-a43f-b2cd89e1a167",
+        "46dfe1cb-5380-5365-9844-d9affc3c3952",
+        "07b89752-35bf-542c-9447-4a287a4af173",
+        "bcd48ff5-5683-5eb1-9847-35df98694b20",
+        "be68f3b3-3b1f-53f1-bb95-895ebf4ca197",
+        "f09eaf2d-ea2f-51e4-afe2-bb0508754275",
+        "f4944219-1dae-56fa-9797-f67acf998514"
+      ]
+    },
+    {
+      "entity": "RFC:MEL2106282AL",
+      "signal": "shared_contact_email_domain",
+      "why_innocent": "Five small suppliers bill from the same mail domain because they use the same outsourced accounting practice. They have different RFCs, different addresses, different CLABEs and different categories.",
+      "invoices": []
+    },
+    {
+      "entity": "RFC:GAL160126E3F",
+      "signal": "efos_vendor_match",
+      "why_innocent": "On the EFOS list as 'presunto', published 2025-12-12. Every invoice from this vendor was issued between February and October 2024, more than a year earlier, each with a purchase order under a 2023 contract. A presumption published later is not proof about earlier trade.",
+      "invoices": [
+        "c6180152-0cf3-52d3-9d12-2fa0224dad6a",
+        "1f3f8e9f-399c-59b9-827f-a34ddb36fa75",
+        "e659169e-ef0a-5828-954b-372c18ea7603",
+        "783db6a4-2fa5-5271-94ad-1278ff6e1508",
+        "68ea2830-a21c-5209-ad06-cd7bd20e0bf1"
+      ]
+    },
+    {
+      "entity": "RFC:XAXX010101000",
+      "signal": "generic_or_malformed_rfc",
+      "why_innocent": "XAXX010101000 is the SAT generic RFC for sales to the general public. It is a placeholder, not a supplier, and the amounts are petty-cash sized.",
+      "invoices": [
+        "538e251b-98f9-537c-953d-c249c26f4184",
+        "eb74d77e-9df6-5972-aaad-d1b1d96e1bc9",
+        "dea2682a-c503-5992-afbc-3ab845f030d7",
+        "f240cff2-e5b7-5abd-b695-85ce9c0e3027",
+        "ff472d2a-8530-57c8-b626-6aa17b4e6496",
+        "2f2d443a-7d5b-5b6c-825b-17ea6d8cb163",
+        "12381199-3435-5af5-a036-119233cbe5d1",
+        "f4fe9ef7-741b-5964-a3d4-601e69859e2b",
+        "eefb6ed5-d5f6-5fd6-b097-9e4bb97bbe6f",
+        "aa7b0ee6-2bfb-5def-b333-4a6f8683cf89",
+        "faa837fc-a8df-5c01-9625-370e152ccde5",
+        "7b92aa23-b684-5ef4-af42-493a2ba8288f",
+        "845b5f64-b268-5c81-b910-8149e8ce6235",
+        "3e649f20-ab9c-56a7-ad7c-9d57b5a38d2c"
+      ]
+    },
+    {
+      "entity": "RFC:VAL150421WB8",
+      "signal": "shared_vendor_clabe",
+      "why_innocent": "Two different RFCs collect into one CLABE because both are companies of the same group and their contracts state that collection is centralised in a corporate treasury account. Both have their own contracts, purchase orders and deliveries.",
+      "invoices": []
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+"""LedgerLens palette, kept in one place so the app and the results view agree."""
+
+BG_COLOR = "#111315"
+CARD_COLOR = "#1A1D21"
+CARD_LIGHT = "#20242A"
+BORDER_COLOR = "#2D333A"
+PANEL_COLOR = "#16191D"
+
+BLUE = "#2474C8"
+BLUE_HOVER = "#1D5FA8"
+
+TEXT_PRIMARY = "#F2F4F7"
+TEXT_SECONDARY = "#A7ADB5"
+TEXT_MUTED = "#707780"
+
+SUCCESS = "#2CC985"
+ERROR = "#E05252"
+WARNING = "#E0A84B"

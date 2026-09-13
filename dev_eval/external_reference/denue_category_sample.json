@@ -1,0 +1,60 @@
+{
+  "_about": "SCIAN sector vocabulary and DENUE establishment-mix weights used to pick vendor categories and addresses. DEV/EVAL ONLY - src/ must never import this.",
+  "source_organization": "Instituto Nacional de Estadistica y Geografia (INEGI)",
+  "datasets": [
+    {
+      "name": "Directorio Estadistico Nacional de Unidades Economicas (DENUE)",
+      "url": "https://www.inegi.org.mx/app/mapa/denue/",
+      "methodology_url": "https://www.inegi.org.mx/contenidos/temas/directorio/doc/metodologia.pdf",
+      "accessed": "2026-09-13"
+    },
+    {
+      "name": "Sistema de Clasificacion Industrial de America del Norte (SCIAN) 2023",
+      "url": "https://www.inegi.org.mx/scian/",
+      "catalogue_pdf": "https://www.inegi.org.mx/contenidos/app/scian/scian.pdf",
+      "accessed": "2026-09-13"
+    }
+  ],
+  "aggregate_fact_used": {
+    "statement": "DENUE 11/2024 reports 6,058,548 establishments: 44% Comercio, 42% Servicios, 11% Industrias.",
+    "source": "INEGI DENUE press release 11/2024 (https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2024/denue/denue2024_11.pdf)",
+    "how_used": "Only as a coarse weighting for how many synthetic vendors fall in commerce/distribution vs services vs industry. No establishment record was copied.",
+    "caveat": "The DENUE mix describes the whole Mexican economy, not the supplier base of one manufacturer. The generator therefore tilts the mix toward services and industrial supply, which is what a manufacturer actually buys. The DENUE figure anchors the ordering, not the exact proportions."
+  },
+  "scian_sectors_referenced": {
+    "23": "Construccion",
+    "31-33": "Industrias manufactureras",
+    "43": "Comercio al por mayor",
+    "46": "Comercio al por menor",
+    "48-49": "Transportes, correos y almacenamiento",
+    "51": "Informacion en medios masivos",
+    "54": "Servicios profesionales, cientificos y tecnicos",
+    "56": "Servicios de apoyo a los negocios y manejo de residuos",
+    "62": "Servicios de salud y de asistencia social",
+    "72": "Servicios de alojamiento temporal y de preparacion de alimentos y bebidas",
+    "81": "Otros servicios excepto actividades gubernamentales"
+  },
+  "vendor_categories_derived": [
+    "Servicios profesionales",
+    "Consultoria",
+    "Servicios de TI",
+    "Construccion",
+    "Mantenimiento industrial",
+    "Logistica y transporte",
+    "Papeleria y consumibles",
+    "Manufactura y maquinados",
+    "Materiales de construccion",
+    "Seguridad privada",
+    "Limpieza y facilities",
+    "Capacitacion",
+    "Publicidad y medios",
+    "Alimentos y comedor industrial",
+    "Equipo de computo",
+    "Refacciones industriales",
+    "Laboratorio y metrologia",
+    "Empaque y embalaje",
+    "Servicios legales",
+    "Arrendamiento de equipo"
+  ],
+  "geography_note": "Municipality and state names are real Mexican places (geography is not an identifiable business). Street numbers, interior numbers and the businesses themselves are synthetic."
+}

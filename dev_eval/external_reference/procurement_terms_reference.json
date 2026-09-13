@@ -1,0 +1,45 @@
+{
+  "_about": "Procurement vocabulary used for purchase_orders.description and contracts.scope_text. DEV/EVAL ONLY - src/ must never import this.",
+  "source_organization": "Secretaria de la Funcion Publica / Secretaria Anticorrupcion y Buen Gobierno - CompraNet",
+  "source_url": "https://compranet.hacienda.gob.mx/",
+  "accessed": "2026-09-13",
+  "what_was_used": "Terminology and contract-shape vocabulary only: the naming conventions Mexican public and corporate procurement uses for framework agreements, milestone schedules and recurring services. NO CompraNet contract record, supplier name, or amount was copied, and no invented misconduct is attached to any CompraNet participant.",
+  "retrieval_limitation": "The CompraNet open-data bulk download was not retrieved in this run. The vocabulary below reflects standard Mexican procurement phrasing and is used as format realism, not as a data extract.",
+  "contract_shapes": {
+    "contrato_marco": "Framework agreement with a fixed monthly fee and a stated term.",
+    "contrato_abierto": "Open contract with a minimum and maximum amount, drawn down by orders.",
+    "por_proyecto": "Project contract paid against milestones (entregables).",
+    "servicio_recurrente": "Recurring monthly service with a fixed fee.",
+    "adquisicion": "One-off acquisition of goods or equipment."
+  },
+  "description_vocabulary": [
+    "Servicio de mantenimiento preventivo y correctivo",
+    "Suministro de refacciones industriales",
+    "Servicios profesionales de consultoria",
+    "Arrendamiento de equipo de computo",
+    "Obra civil - adecuacion de nave industrial",
+    "Servicio integral de limpieza",
+    "Servicio de vigilancia y seguridad privada",
+    "Suministro de material de empaque",
+    "Servicio de transporte y distribucion",
+    "Capacitacion tecnica especializada",
+    "Servicio de calibracion y metrologia",
+    "Licenciamiento y soporte de software",
+    "Servicio de comedor industrial",
+    "Suministro de papeleria y consumibles de oficina",
+    "Asesoria juridica corporativa",
+    "Servicio de disposicion de residuos de manejo especial",
+    "Suministro e instalacion de equipo electromecanico",
+    "Estudio tecnico y dictamen estructural",
+    "Servicio de paqueteria y mensajeria",
+    "Mantenimiento de infraestructura electrica"
+  ],
+  "milestone_vocabulary": [
+    "Entregable 1 - Diagnostico",
+    "Entregable 2 - Diseno de detalle",
+    "Entregable 3 - Implementacion",
+    "Entregable 4 - Cierre y documentacion",
+    "Anticipo 30%",
+    "Estimacion de avance de obra"
+  ]
+}

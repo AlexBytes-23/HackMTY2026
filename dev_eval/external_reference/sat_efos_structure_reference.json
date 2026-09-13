@@ -1,0 +1,23 @@
+{
+  "_about": "Structure and vocabulary of the SAT Articulo 69-B CFF listing, used to shape the synthetic efos_list table. DEV/EVAL ONLY - src/ must never import this.",
+  "source_organization": "Servicio de Administracion Tributaria (SAT) / Diario Oficial de la Federacion (DOF)",
+  "legal_basis": "Articulo 69-B del Codigo Fiscal de la Federacion",
+  "accessed": "2026-09-13",
+  "how_it_was_obtained": "Web search over public reporting of the SAT 69-B publications, including the DOF global definitive listings of 2025-10-03, 2026-03-13 and 2026-07-03 (oficio 500-05-00-00-00-2026-16059). The SAT listing CSV itself was NOT downloaded and NO real taxpayer record appears anywhere in this estate.",
+  "status_vocabulary_observed": {
+    "presunto": "Taxpayer presumed to have issued CFDI covering non-existent operations. Still within the 15-business-day rebuttal window / pending definitive resolution.",
+    "definitivo": "Definitive listing. Per the fifth paragraph of art. 69-B the CFDI issued by the taxpayer produce no fiscal effect.",
+    "desvirtuado": "Taxpayer rebutted the presumption. NOT USED: the official estate_schema.sql constrains efos_list.status to definitivo | presunto.",
+    "sentencia_favorable": "Listing set aside by a court ruling. NOT USED, same reason."
+  },
+  "structural_facts_used_for_realism": [
+    "A taxpayer reaches 'definitivo' only after first appearing as 'presunto', so a definitive publication date is always later than the corresponding presumption.",
+    "Listings are published in the DOF in batches on a small number of dates per year, so publication_date values cluster rather than spreading uniformly.",
+    "The legal effect attaches from the definitive publication, which is why the estate deliberately contains invoices issued BOTH before and after a publication_date."
+  ],
+  "ethical_note": "Every RFC and legal_name in efos_list is synthetic and procedurally generated. No RFC was copied from the SAT listing. No invented transaction is attached to any real taxpayer.",
+  "generic_rfcs": {
+    "XAXX010101000": "Well-known generic RFC for operations with the general public (national). Present in the estate as an ordinary petty-cash counterparty decoy - it is a placeholder, not a taxpayer.",
+    "XEXX010101000": "Generic RFC for foreign residents. Not used."
+  }
+}
