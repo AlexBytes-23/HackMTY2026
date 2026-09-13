@@ -255,3 +255,49 @@ def test_rule_context_absent_vs_supplied(base_case_state, available_actions):
     assert "R1" in prompt_supplied
     assert "CANNOT be validated" not in prompt_supplied
 
+
+def test_evidence_overlap_does_not_automatically_force_failure(base_case_state, available_actions):
+    response = MethodCriticReview(
+        target_hypothesis_id="hyp_1",
+        outcome="clear",
+        reasoning_summary="Overlap is fine.",
+        referenced_evidence_ids=["ev_1"]
+    ).model_dump_json()
+    client = FakeLLMClient(response)
+    result = criticize_method(client, base_case_state, "hyp_1", available_actions)
+    assert result.review.outcome == "clear"
+    assert len(result.deterministic_dependencies) > 0
+
+def test_nonexistent_action_history_step_rejected(base_case_state, available_actions):
+    response = MethodCriticReview(
+        target_hypothesis_id="hyp_1",
+        outcome="clear",
+        reasoning_summary="Ok.",
+        referenced_action_steps=[999]
+    ).model_dump_json()
+    client = FakeLLMClient(response)
+    with pytest.raises(ValueError, match="Hallucinated action step: 999"):
+        criticize_method(client, base_case_state, "hyp_1", available_actions)
+
+def test_clear_with_non_material_notes(base_case_state, available_actions):
+    response = MethodCriticReview(
+        target_hypothesis_id="hyp_1",
+        outcome="clear",
+        reasoning_summary="Minor note.",
+        non_material_notes=["Just a note."]
+    ).model_dump_json()
+    client = FakeLLMClient(response)
+    result = criticize_method(client, base_case_state, "hyp_1", available_actions)
+    assert result.review.outcome == "clear"
+    assert "Just a note." in result.review.non_material_notes
+
+def test_no_alternative_business_story_required(base_case_state, available_actions):
+    response = MethodCriticReview(
+        target_hypothesis_id="hyp_1",
+        outcome="clear",
+        reasoning_summary="Method is sound."
+    ).model_dump_json()
+    client = FakeLLMClient(response)
+    result = criticize_method(client, base_case_state, "hyp_1", available_actions)
+    assert result.review.outcome == "clear"
+    assert not hasattr(result.review, "strongest_legitimate_alternative")
